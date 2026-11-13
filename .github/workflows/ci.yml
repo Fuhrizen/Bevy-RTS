@@ -44,4 +44,8 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Tests
+        env:
+          # Large Bevy test binaries are expensive to build and link with debug symbols.
+          # Keep assertions/test execution, but omit debug symbols on CI runners.
+          CARGO_PROFILE_TEST_DEBUG: "0"
         run: cargo test --all-targets --all-features

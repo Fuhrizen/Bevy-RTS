@@ -1,4 +1,7 @@
-use crate::model::*;
+use crate::{
+    model::*,
+    operation::{CONTROL_TARGET, DEPOTS, Finish, Mode, TIMED_LIMIT, in_cover, leader},
+};
 use bevy::prelude::*;
 use std::collections::{BTreeSet, VecDeque};
 
@@ -42,6 +45,7 @@ fn make_squad(team: Team, index: usize, callsign: String, kit: Kit, manpower: u8
         supplies: 100.0,
         orders: VecDeque::new(),
         entrenched: false,
+        hold_fire: false,
         smoke: 0.0,
         focus: None,
         ai: AiState::Idle,
@@ -72,24 +76,24 @@ fn new_battle(roster: &Roster) -> Battle {
         };
         squads.push(make_squad(Team::Red, i, format!("Red {}", i + 1), kit, 6));
     }
-    let points = [
-        ("Northwest", Vec2::new(-620.0, 380.0)),
-        ("North", Vec2::new(0.0, 440.0)),
-        ("Northeast", Vec2::new(620.0, 380.0)),
-        ("Southwest", Vec2::new(-620.0, -380.0)),
-        ("South", Vec2::new(0.0, -440.0)),
-        ("Southeast", Vec2::new(620.0, -380.0)),
-    ];
-    let objectives = points
-        .into_iter()
-        .map(|(name, pos)| Objective {
-            name,
-            pos,
-            owner: None,
-            capture: 0.0,
-            contested: false,
-        })
-        .collect();
+    let objectives = [
+        "Northwest",
+        "North",
+        "Northeast",
+        "Southwest",
+        "South",
+        "Southeast",
+    ]
+    .into_iter()
+    .zip(roster.map.points())
+    .map(|(name, pos)| Objective {
+        name,
+        pos,
+        owner: None,
+        capture: 0.0,
+        contested: false,
+    })
+    .collect();
     Battle {
         squads,
         objectives,
@@ -97,6 +101,10 @@ fn new_battle(roster: &Roster) -> Battle {
         draw: false,
         elapsed: 0.0,
         effects: Vec::new(),
+        map: roster.map,
+        mode: roster.mode,
+        score: [0.0; 2],
+        finish: None,
         volley_count: 0,
         order_count: 0,
         paused: false,
@@ -152,6 +160,23 @@ pub fn toggle_entrench(battle: &mut Battle) {
     }
 }
 
+pub fn toggle_fire_control(battle: &mut Battle) {
+    let hold = battle.selected.iter().any(|&i| {
+        battle
+            .squads
+            .get(i)
+            .is_some_and(|squad| squad.team == Team::Blue && squad.alive() && !squad.hold_fire)
+    });
+    for &i in &battle.selected {
+        if let Some(squad) = battle.squads.get_mut(i)
+            && squad.team == Team::Blue
+            && squad.alive()
+        {
+            squad.hold_fire = hold;
+        }
+    }
+}
+
 pub fn deploy_smoke(battle: &mut Battle) {
     for &i in &battle.selected {
         if let Some(squad) = battle.squads.get_mut(i)
@@ -166,25 +191,37 @@ pub fn deploy_smoke(battle: &mut Battle) {
     }
 }
 
-/// Resupply is only available at the team's home position.
+/// Route selected squads to their closest usable supply source.
 pub fn resupply_selected(battle: &mut Battle) {
     for &i in &battle.selected {
-        if let Some(squad) = battle.squads.get_mut(i) {
-            if squad.team == Team::Blue && squad.pos.distance(squad.team.spawn()) <= SUPPLY_RADIUS {
-                squad.supplies = 100.0;
-                for soldier in &mut squad.soldiers {
-                    if soldier.hp > 0.0 {
-                        soldier.hp = (soldier.hp + 35.0).min(100.0);
-                    }
-                }
-            } else if squad.team == Team::Blue && squad.alive() {
-                squad.orders.clear();
-                squad.orders.push_back(squad.team.spawn());
+        if let Some(squad) = battle.squads.get_mut(i)
+            && squad.team == Team::Blue
+            && squad.alive()
+        {
+            let destination = supply_destination(&battle.objectives, squad.team, squad.pos);
+            squad.orders.clear();
+            squad.focus = None;
+            if squad.pos.distance(destination) > SUPPLY_RADIUS {
+                squad.orders.push_back(destination);
                 squad.entrenched = false;
-                squad.focus = None;
             }
         }
     }
+}
+
+pub(crate) fn supply_destination(objectives: &[Objective], team: Team, point: Vec2) -> Vec2 {
+    DEPOTS
+        .into_iter()
+        .filter_map(|index| objectives.get(index))
+        .filter(|objective| objective.owner == Some(team) && !objective.contested)
+        .map(|objective| objective.pos)
+        .chain(std::iter::once(team.spawn()))
+        .min_by(|a, b| {
+            point
+                .distance_squared(*a)
+                .total_cmp(&point.distance_squared(*b))
+        })
+        .unwrap_or_else(|| team.spawn())
 }
 
 fn simulate(time: Res<Time<Fixed>>, settings: Res<Settings>, mut battle: ResMut<Battle>) {
@@ -195,6 +232,7 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
     if battle.paused || battle.winner.is_some() || battle.draw {
         return;
     }
+    let previous_elapsed = battle.elapsed;
     battle.elapsed += dt;
     battle.effects.retain_mut(|effect| {
         effect.ttl -= dt;
@@ -223,10 +261,12 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
                 squad.pos += delta.normalize_or_zero() * speed * dt;
             }
         }
-        if squad.pos.distance(squad.team.spawn()) <= SUPPLY_RADIUS {
-            squad.supplies = (squad.supplies + 8.0 * dt).min(100.0);
+        let destination = supply_destination(&battle.objectives, squad.team, squad.pos);
+        if squad.pos.distance(destination) <= SUPPLY_RADIUS {
+            let at_base = destination == squad.team.spawn();
+            squad.supplies = (squad.supplies + (if at_base { 8.0 } else { 4.0 }) * dt).min(100.0);
             for soldier in &mut squad.soldiers {
-                if soldier.hp > 0.0 {
+                if at_base && soldier.hp > 0.0 {
                     soldier.hp = (soldier.hp + 3.0 * dt).min(100.0);
                 }
             }
@@ -236,7 +276,7 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
     let mut volleys = Vec::new();
     for i in 0..battle.squads.len() {
         let attacker = &battle.squads[i];
-        if !attacker.alive() || attacker.supplies < 1.0 {
+        if !attacker.alive() || attacker.hold_fire || attacker.supplies < 1.0 {
             continue;
         }
         let range = if matches!(attacker.kit, Kit::Scout) {
@@ -269,15 +309,22 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
                     .map(|(j, _)| j)
             });
         if let Some(j) = target {
-            let defense = (if battle.squads[j].entrenched {
-                0.65
+            let terrain = if in_cover(battle.map, battle.squads[j].pos) {
+                0.75
             } else {
                 1.0
-            }) * (if battle.squads[j].smoke > 0.0 {
-                0.55
-            } else {
-                1.0
-            });
+            };
+            let defense = terrain
+                * (if battle.squads[j].entrenched {
+                    0.65
+                } else {
+                    1.0
+                })
+                * (if battle.squads[j].smoke > 0.0 {
+                    0.55
+                } else {
+                    1.0
+                });
             let ready = attacker
                 .soldiers
                 .iter()
@@ -381,27 +428,72 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
             objective.owner = None;
         }
     }
-    let blue_alive = battle
-        .squads
-        .iter()
-        .any(|s| s.team == Team::Blue && s.alive());
-    let red_alive = battle
-        .squads
-        .iter()
-        .any(|s| s.team == Team::Red && s.alive());
-    if !blue_alive && !red_alive {
-        battle.draw = true;
-    } else if !battle.objectives.is_empty()
-        && battle
+    resolve_operation(battle, dt, previous_elapsed);
+}
+
+fn resolve_operation(battle: &mut Battle, dt: f32, previous_elapsed: f32) {
+    let active = [Team::Blue, Team::Red].map(|team| {
+        battle
+            .squads
+            .iter()
+            .any(|squad| squad.team == team && squad.alive())
+    });
+    let owned = [Team::Blue, Team::Red].map(|team| {
+        battle
             .objectives
             .iter()
-            .all(|o| o.owner == Some(Team::Blue))
-    {
-        battle.winner = Some(Team::Blue);
-    } else if !battle.objectives.is_empty()
-        && battle.objectives.iter().all(|o| o.owner == Some(Team::Red))
-    {
-        battle.winner = Some(Team::Red);
+            .filter(|point| point.owner == Some(team))
+            .count()
+    });
+    let scored_dt = if battle.mode == Mode::Timed {
+        dt.min((TIMED_LIMIT - previous_elapsed).max(0.0))
+    } else {
+        dt
+    };
+    if battle.mode != Mode::Conquest {
+        for point in battle.objectives.iter().filter(|point| !point.contested) {
+            match point.owner {
+                Some(Team::Blue) => battle.score[0] += scored_dt,
+                Some(Team::Red) => battle.score[1] += scored_dt,
+                None => {}
+            }
+        }
+    }
+    let outcome = match battle.mode {
+        _ if active == [false, false] => Some((Finish::Elimination, None)),
+        Mode::Conquest
+            if !battle.objectives.is_empty() && owned.contains(&battle.objectives.len()) =>
+        {
+            Some((
+                Finish::Conquest,
+                Some(if owned[0] > owned[1] {
+                    Team::Blue
+                } else {
+                    Team::Red
+                }),
+            ))
+        }
+        Mode::Conquest => None,
+        _ if active[0] != active[1] => Some((
+            Finish::Elimination,
+            Some(if active[0] { Team::Blue } else { Team::Red }),
+        )),
+        Mode::Control
+            if battle.score.iter().any(|&score| score >= CONTROL_TARGET)
+                && leader(battle.score).is_some() =>
+        {
+            Some((Finish::Score, leader(battle.score)))
+        }
+        Mode::Timed if battle.elapsed >= TIMED_LIMIT => {
+            battle.elapsed = TIMED_LIMIT;
+            Some((Finish::Time, leader(battle.score)))
+        }
+        _ => None,
+    };
+    if let Some((reason, winner)) = outcome {
+        battle.finish = Some(reason);
+        battle.winner = winner;
+        battle.draw = winner.is_none();
     }
 }
 
@@ -410,6 +502,90 @@ mod tests {
     use super::*;
 
     const DT: f32 = 1.0 / 64.0;
+
+    #[test]
+    fn control_scores_only_uncontested_owned_objectives() {
+        let mut battle = new_battle(&Roster {
+            mode: Mode::Control,
+            ..default()
+        });
+        battle.objectives[0].owner = Some(Team::Blue);
+        battle.objectives[1].owner = Some(Team::Blue);
+        battle.objectives[1].contested = true;
+        battle.score[0] = CONTROL_TARGET - 1.0;
+        resolve_operation(&mut battle, 1.0, 0.0);
+        assert_eq!(battle.score, [CONTROL_TARGET, 0.0]);
+        assert_eq!(battle.finish, Some(Finish::Score));
+        assert_eq!(battle.winner, Some(Team::Blue));
+    }
+
+    #[test]
+    fn timed_mode_scores_only_until_the_deadline_and_can_draw() {
+        let mut battle = new_battle(&Roster {
+            mode: Mode::Timed,
+            ..default()
+        });
+        battle.elapsed = TIMED_LIMIT + 0.5;
+        battle.objectives[0].owner = Some(Team::Blue);
+        battle.score = [1.0, 1.5];
+        resolve_operation(&mut battle, 1.0, TIMED_LIMIT - 0.5);
+        assert_eq!(battle.score, [1.5, 1.5]);
+        assert_eq!(battle.elapsed, TIMED_LIMIT);
+        assert_eq!(battle.finish, Some(Finish::Time));
+        assert!(battle.draw);
+    }
+
+    #[test]
+    fn alternate_layout_and_personnel_cap_apply_to_deployment() {
+        let mut roster = Roster {
+            map: crate::operation::Map::Highmoor,
+            ..default()
+        };
+        roster.cycle_manpower(0);
+        roster.cycle_manpower(1);
+        assert_eq!(roster.squads[0].manpower, 4);
+        assert_eq!(roster.squads[1].manpower, 10);
+        assert!(roster.personnel() <= crate::operation::PERSONNEL_LIMIT);
+        let battle = new_battle(&roster);
+        assert_eq!(battle.objectives[0].pos, roster.map.points()[0]);
+        assert_eq!(
+            battle.report(Team::Blue).soldiers_deployed,
+            usize::from(roster.personnel())
+        );
+    }
+
+    #[test]
+    fn depots_require_friendly_uncontested_ownership() {
+        let mut battle = new_battle(&Roster::default());
+        let depot = battle.objectives[DEPOTS[0]].pos;
+        battle.squads[0].pos = depot;
+        battle.squads[0].supplies = 20.0;
+        battle.squads[0].soldiers[0].hp = 50.0;
+        battle.objectives[DEPOTS[0]].owner = Some(Team::Blue);
+        battle.objectives[DEPOTS[0]].capture = 1.0;
+        step_battle(&mut battle, Difficulty::Standard, DT);
+        assert!(battle.squads[0].supplies > 20.0);
+        assert_eq!(battle.squads[0].soldiers[0].hp, 50.0);
+        battle.objectives[DEPOTS[0]].contested = true;
+        assert_eq!(
+            supply_destination(&battle.objectives, Team::Blue, depot),
+            Team::Blue.spawn()
+        );
+    }
+
+    #[test]
+    fn hold_fire_preserves_supply_and_toggling_it_off_resumes_fire() {
+        let mut battle = new_battle(&Roster::default());
+        battle.squads[0].pos = Vec2::ZERO;
+        battle.squads[4].pos = Vec2::X * 120.0;
+        battle.selected.insert(0);
+        toggle_fire_control(&mut battle);
+        step_battle(&mut battle, Difficulty::Standard, DT);
+        assert_eq!(battle.squads[0].supplies, 100.0);
+        toggle_fire_control(&mut battle);
+        step_battle(&mut battle, Difficulty::Standard, DT);
+        assert!(battle.squads[0].supplies < 100.0);
+    }
 
     #[test]
     fn match_report_counts_ownership_and_living_soldiers_by_team() {

@@ -45,7 +45,12 @@ pub fn direct_squads(battle: &mut Battle) {
         squad.entrenched = false;
         match squad.ai {
             AiState::Resupply | AiState::Recover => {
-                route_to(squad, Team::Red.spawn());
+                let point = if squad.ai == AiState::Recover {
+                    Team::Red.spawn()
+                } else {
+                    crate::battle::supply_destination(&battle.objectives, Team::Red, squad.pos)
+                };
+                route_to(squad, point);
             }
             AiState::Engage(enemy) => {
                 squad.focus = Some(enemy);

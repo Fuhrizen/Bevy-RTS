@@ -90,3 +90,23 @@ A successful, push-triggered **Linting** run on `main` automatically updates the
 To retain a particular canary build, archive its downloaded files separately before the next update. The `canary` tag is deliberately moved forward and must not be used as an immutable dependency.
 
 Only the manual **Tag release** workflow produces stable releases. Pushing a tag alone does not launch a release.
+
+## Skirmish operations
+
+Choose a map and mode on the loadout screen. The four Blue squads share a
+32-soldier budget, so increasing one squad may require thinning another.
+
+- **Riverbend** uses the original river valley and wide sectors.
+- **Highmoor** offsets the approach routes and uses a different relief map.
+- **Crossroads** clusters objectives closer to the centre.
+
+**Conquest** requires all six sectors. **Control** awards one point per second
+per uncontested sector and ends when a side reaches 480 with the lead.
+**Timed** uses the same scoring and finishes after three minutes. In Control
+and Timed, eliminating the other force also wins. An even score at the Timed
+deadline results in a draw.
+
+Green rings mark cover, which reduces incoming damage by 25%. The north and
+south depots replenish supply while friendly and uncontested. Resupply directs
+selected squads to the nearest available depot or home base. Home bases also
+restore health. Toggle Hold Fire applies one fire policy to all selected squads.

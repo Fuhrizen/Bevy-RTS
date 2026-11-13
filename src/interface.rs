@@ -1,4 +1,5 @@
 use crate::model::{Battle, Difficulty, HudBlock, Kit, Roster, Screen, Settings, Team};
+use crate::operation::{CONTROL_TARGET, Finish, Mode, PERSONNEL_LIMIT, TIMED_LIMIT};
 use bevy::{
     ecs::system::SystemParam,
     picking::hover::Hovered,
@@ -26,10 +27,13 @@ enum Action {
     EdgePan,
     Scale,
     Callsign(usize),
+    Map,
+    Mode,
     Size(usize),
     Kit(usize),
     Pause,
     Hold,
+    FireControl,
     Entrench,
     Smoke,
     Resupply,
@@ -306,11 +310,34 @@ fn roster_panel(commands: &mut Commands, r: Entity, roster: &Roster) {
         |p| {
             text(p, "BLUE FORCE  /  MISSION PREPARATION", 12., BLUE);
             text(p, "ASSEMBLE YOUR FORCE", 30., INK);
+            p.spawn((
+                Pickable::IGNORE,
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(8),
+                    ..default()
+                },
+            ))
+            .with_children(|row| {
+                button(
+                    row,
+                    format!("MAP  {}", roster.map.label()),
+                    Action::Map,
+                    180.,
+                );
+                button(
+                    row,
+                    format!("MODE  {}", roster.mode.label()),
+                    Action::Mode,
+                    180.,
+                );
+            });
+            text(p, roster.mode.rules(), 13., MUTED);
             text(
                 p,
-                "Cycle each field to configure your four squads.",
-                14.,
-                MUTED,
+                format!("PERSONNEL  {}/{}", roster.personnel(), PERSONNEL_LIMIT),
+                13.,
+                BLUE,
             );
             for (i, squad) in roster.squads.iter().enumerate() {
                 p.spawn((
@@ -505,7 +532,13 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                 button(row, "SMOKE", Action::Smoke, 68.);
                 button(row, "RESUPPLY", Action::Resupply, 68.);
             });
-            text(p, "RMB MOVE / SHIFT QUEUE", 10., MUTED);
+            button(p, "TOGGLE HOLD FIRE", Action::FireControl, 90.);
+            text(
+                p,
+                "RMB MOVE / SHIFT QUEUE\n+ DEPOTS / GREEN RINGS COVER",
+                10.,
+                MUTED,
+            );
         },
     );
     if battle.paused || battle.winner.is_some() || battle.draw {
@@ -540,14 +573,23 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                 );
                 if battle.winner.is_some() || battle.draw {
                     let seconds = battle.elapsed as u32;
-                    let reason = if battle.draw {
-                        "Both forces were wiped out.".to_owned()
-                    } else {
-                        format!(
-                            "{} secured all {} objectives.",
-                            battle.winner.map_or("", Team::label),
+                    let winner = battle.winner.map_or("", Team::label);
+                    let reason = match battle.finish {
+                        Some(Finish::Score) => format!("{winner} reached the control target."),
+                        Some(Finish::Time) if battle.draw => {
+                            "Time expired with scores level.".into()
+                        }
+                        Some(Finish::Time) => format!("{winner} led when time expired."),
+                        Some(Finish::Elimination) if battle.draw => {
+                            "Both forces were wiped out.".into()
+                        }
+                        Some(Finish::Elimination) => {
+                            format!("{winner} eliminated the opposing force.")
+                        }
+                        _ => format!(
+                            "{winner} secured all {} objectives.",
                             battle.objectives.len()
-                        )
+                        ),
                     };
                     text(
                         p,
@@ -555,6 +597,18 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                         13.,
                         MUTED,
                     );
+                    if battle.mode != Mode::Conquest {
+                        text(
+                            p,
+                            format!(
+                                "CONTROL SCORE  {:.0} BLUE / {:.0} RED",
+                                battle.score[0].floor(),
+                                battle.score[1].floor()
+                            ),
+                            12.,
+                            GOLD,
+                        );
+                    }
                     for team in [Team::Blue, Team::Red] {
                         let report = battle.report(team);
                         text(
@@ -621,6 +675,7 @@ fn actions(
             && matches!(
                 *action,
                 Action::Hold
+                    | Action::FireControl
                     | Action::Entrench
                     | Action::Smoke
                     | Action::Resupply
@@ -681,13 +736,16 @@ fn actions(
                 roster.squads[i].callsign = names[(current + 1) % names.len()].into();
                 redraw = true;
             }
+            Action::Map => {
+                roster.map = roster.map.next();
+                redraw = true;
+            }
+            Action::Mode => {
+                roster.mode = roster.mode.next();
+                redraw = true;
+            }
             Action::Size(i) => {
-                roster.squads[i].manpower = match roster.squads[i].manpower {
-                    4 => 6,
-                    6 => 8,
-                    8 => 10,
-                    _ => 4,
-                };
+                roster.cycle_manpower(i);
                 redraw = true;
             }
             Action::Kit(i) => {
@@ -708,6 +766,7 @@ fn actions(
                     }
                 }
             }
+            Action::FireControl => crate::battle::toggle_fire_control(&mut battle),
             Action::Entrench => crate::battle::toggle_entrench(&mut battle),
             Action::Smoke => crate::battle::deploy_smoke(&mut battle),
             Action::Resupply => crate::battle::resupply_selected(&mut battle),
@@ -765,17 +824,31 @@ fn refresh_battle(
 fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text, &mut TextColor)>) {
     for (marker, mut text, mut color) in &mut labels {
         let value = match *marker {
-            HudText::Tally => format!(
-                "{:02}:{:02}  |  {}/{} HELD",
-                battle.elapsed as u32 / 60,
-                battle.elapsed as u32 % 60,
-                battle
-                    .objectives
-                    .iter()
-                    .filter(|o| o.owner == Some(Team::Blue))
-                    .count(),
-                battle.objectives.len()
-            ),
+            HudText::Tally => {
+                let seconds = if battle.mode == Mode::Timed {
+                    (TIMED_LIMIT - battle.elapsed).max(0.0).ceil() as u32
+                } else {
+                    battle.elapsed as u32
+                };
+                let clock = format!("{:02}:{:02}", seconds / 60, seconds % 60);
+                match battle.mode {
+                    Mode::Conquest => format!(
+                        "{clock}  |  {}/{} HELD",
+                        battle.report(Team::Blue).objectives,
+                        battle.objectives.len()
+                    ),
+                    Mode::Control => format!(
+                        "{clock}  |  {:.0} - {:.0} / {CONTROL_TARGET:.0}",
+                        battle.score[0].floor(),
+                        battle.score[1].floor()
+                    ),
+                    Mode::Timed => format!(
+                        "{clock}  |  BLUE {:.0} - {:.0} RED",
+                        battle.score[0].floor(),
+                        battle.score[1].floor()
+                    ),
+                }
+            }
             HudText::Objective(i) => battle
                 .objectives
                 .get(i)
@@ -862,6 +935,8 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text, &mut 
                         "COOLDOWN"
                     } else if !s.orders.is_empty() {
                         "MOVING"
+                    } else if s.hold_fire {
+                        "HOLD FIRE"
                     } else if s.entrenched {
                         "DUG IN"
                     } else {
@@ -933,10 +1008,12 @@ mod tests {
         press(&mut app, |action| matches!(action, Action::BackMenu));
         press(&mut app, |action| matches!(action, Action::Play));
         press(&mut app, |action| matches!(action, Action::Kit(0)));
+        press(&mut app, |action| matches!(action, Action::Map));
         press(&mut app, |action| matches!(action, Action::Deploy));
 
         let battle = app.world().resource::<Battle>();
         assert_eq!(battle.squads.len(), 8);
+        assert_eq!(battle.map, crate::operation::Map::Highmoor);
         assert_eq!(battle.squads[0].kit, Kit::Support);
         press(&mut app, |action| matches!(action, Action::Pause));
         assert!(app.world().resource::<Battle>().paused);
@@ -944,6 +1021,8 @@ mod tests {
         assert!(!app.world().resource::<Battle>().paused);
         press(&mut app, |action| matches!(action, Action::Select(0)));
         assert!(app.world().resource::<Battle>().selected.contains(&0));
+        press(&mut app, |action| matches!(action, Action::FireControl));
+        assert!(app.world().resource::<Battle>().squads[0].hold_fire);
 
         {
             let mut battle = app.world_mut().resource_mut::<Battle>();

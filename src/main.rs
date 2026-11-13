@@ -2,6 +2,7 @@ mod ai;
 mod battle;
 mod interface;
 mod model;
+mod operation;
 mod sound;
 mod terrain;
 mod world;

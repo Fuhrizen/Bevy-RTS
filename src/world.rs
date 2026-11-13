@@ -2,6 +2,7 @@
 use crate::model::{
     Battle, CAPTURE_RADIUS, HudBlock, MAP_HALF, SUPPLY_RADIUS, Screen, Settings, Team,
 };
+use crate::operation::{DEPOTS, Map, cover_areas};
 use bevy::input::mouse::MouseWheel;
 use bevy::window::PrimaryWindow;
 use bevy::{picking::hover::Hovered, prelude::*, text::FontSize};
@@ -27,7 +28,7 @@ impl Plugin for WorldPlugin {
 #[derive(Component)]
 struct MapEntity;
 #[derive(Resource)]
-struct Terrain(Handle<Image>);
+struct Terrain([Handle<Image>; 3]);
 #[derive(Component)]
 struct SquadLabel(usize);
 #[derive(Component)]
@@ -42,7 +43,10 @@ struct PointerState {
 
 fn setup_world(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.spawn(Camera2d);
-    commands.insert_resource(Terrain(images.add(crate::terrain::relief_image())));
+    commands.insert_resource(Terrain(
+        [Map::Riverbend, Map::Highmoor, Map::Crossroads]
+            .map(|map| images.add(crate::terrain::relief_image(map))),
+    ));
 }
 
 fn enter_map(
@@ -50,6 +54,7 @@ fn enter_map(
     mut camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     mut pointer: ResMut<PointerState>,
     terrain: Res<Terrain>,
+    roster: Res<crate::model::Roster>,
 ) {
     *pointer = PointerState::default();
     if let Ok((mut transform, mut projection)) = camera.single_mut() {
@@ -63,7 +68,7 @@ fn enter_map(
         MapEntity,
         Sprite {
             custom_size: Some(MAP_HALF * 2.),
-            ..Sprite::from_image(terrain.0.clone())
+            ..Sprite::from_image(terrain.0[roster.map as usize].clone())
         },
         Transform::from_xyz(0., 0., -10.),
     ));
@@ -100,11 +105,15 @@ fn create_labels(mut commands: Commands, battle: Res<Battle>) {
             Transform::from_xyz(center.x, center.y + 115., 5.),
         ));
     }
-    for objective in &battle.objectives {
+    for (index, objective) in battle.objectives.iter().enumerate() {
         commands.spawn((
             MapEntity,
             ObjectiveLabel,
-            Text2d::new(objective.name),
+            Text2d::new(if DEPOTS.contains(&index) {
+                format!("{} Depot", objective.name)
+            } else {
+                objective.name.to_owned()
+            }),
             TextFont {
                 font_size: FontSize::Px(19.),
                 ..default()
@@ -406,7 +415,16 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
         gizmos.line_2d(cross - Vec2::X * 11., cross + Vec2::X * 11., team.color());
         gizmos.line_2d(cross - Vec2::Y * 11., cross + Vec2::Y * 11., team.color());
     }
-    for objective in &battle.objectives {
+    for (center, radius) in cover_areas(battle.map) {
+        let color = Color::srgba(0.55, 0.78, 0.46, 0.42);
+        gizmos.circle_2d(center, radius, color);
+        for offset in [-24., 0., 24.] {
+            let p = center + Vec2::new(offset, 0.);
+            gizmos.line_2d(p + Vec2::new(-8., -5.), p + Vec2::new(0., 8.), color);
+            gizmos.line_2d(p + Vec2::new(0., 8.), p + Vec2::new(8., -5.), color);
+        }
+    }
+    for (index, objective) in battle.objectives.iter().enumerate() {
         let color = objective.display_color();
         gizmos.circle_2d(objective.pos, CAPTURE_RADIUS, color.with_alpha(0.58));
         if objective.contested {
@@ -415,6 +433,11 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
                 CAPTURE_RADIUS + 5.,
                 Color::srgba(1., 0.72, 0.31, 0.8),
             );
+        }
+        if DEPOTS.contains(&index) {
+            let depot = objective.pos + Vec2::new(0., 34.);
+            gizmos.line_2d(depot - Vec2::X * 9., depot + Vec2::X * 9., color);
+            gizmos.line_2d(depot - Vec2::Y * 9., depot + Vec2::Y * 9., color);
         }
         let bar = objective.pos + Vec2::new(0., -96.);
         gizmos.line_2d(

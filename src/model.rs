@@ -1,4 +1,5 @@
 //! Shared game state for simulation, rendering, and the player interface.
+use crate::operation::{Finish, Map, Mode, PERSONNEL_LIMIT};
 use std::collections::{BTreeSet, VecDeque};
 
 use bevy::prelude::*;
@@ -131,11 +132,15 @@ pub struct SquadConfig {
 #[derive(Resource)]
 pub struct Roster {
     pub squads: [SquadConfig; 4],
+    pub map: Map,
+    pub mode: Mode,
 }
 
 impl Default for Roster {
     fn default() -> Self {
         Self {
+            map: Map::default(),
+            mode: Mode::default(),
             squads: [
                 ("Alpha", Kit::Rifle),
                 ("Bravo", Kit::Support),
@@ -148,6 +153,22 @@ impl Default for Roster {
                 manpower: 8,
             }),
         }
+    }
+}
+
+impl Roster {
+    pub fn personnel(&self) -> u8 {
+        self.squads.iter().map(|squad| squad.manpower).sum()
+    }
+
+    pub fn cycle_manpower(&mut self, index: usize) {
+        let current = self.squads[index].manpower;
+        let next = if current >= 10 { 4 } else { current + 2 };
+        self.squads[index].manpower = if self.personnel() - current + next <= PERSONNEL_LIMIT {
+            next
+        } else {
+            4
+        };
     }
 }
 
@@ -178,6 +199,7 @@ pub struct Squad {
     pub supplies: f32,
     pub orders: VecDeque<Vec2>,
     pub entrenched: bool,
+    pub hold_fire: bool,
     pub smoke: f32,
     pub focus: Option<usize>,
     pub ai: AiState,
@@ -251,6 +273,10 @@ pub struct Battle {
     pub draw: bool,
     pub elapsed: f32,
     pub effects: Vec<VolleyEffect>,
+    pub map: Map,
+    pub mode: Mode,
+    pub score: [f32; 2],
+    pub finish: Option<Finish>,
     pub volley_count: u64,
     pub order_count: u64,
     pub paused: bool,

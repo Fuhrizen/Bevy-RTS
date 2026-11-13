@@ -96,6 +96,9 @@ fn new_battle(roster: &Roster) -> Battle {
         winner: None,
         draw: false,
         elapsed: 0.0,
+        effects: Vec::new(),
+        volley_count: 0,
+        order_count: 0,
         paused: false,
         selected: BTreeSet::new(),
     }
@@ -193,6 +196,10 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
         return;
     }
     battle.elapsed += dt;
+    battle.effects.retain_mut(|effect| {
+        effect.ttl -= dt;
+        effect.ttl > 0.0
+    });
     for squad in &mut battle.squads {
         squad.smoke = (squad.smoke - dt).max(0.0);
         for soldier in &mut squad.soldiers {
@@ -290,7 +297,14 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
             }
         }
     }
-    for &(attacker, _, _) in &volleys {
+    for &(attacker, target, _) in &volleys {
+        battle.effects.push(VolleyEffect {
+            from: battle.squads[attacker].pos,
+            to: battle.squads[target].pos,
+            team: battle.squads[attacker].team,
+            ttl: 0.24,
+        });
+        battle.volley_count += 1;
         let squad = &mut battle.squads[attacker];
         let cooldown = if squad.kit == Kit::Support { 0.85 } else { 1.2 };
         for soldier in &mut squad.soldiers {

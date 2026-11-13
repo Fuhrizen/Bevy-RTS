@@ -116,10 +116,32 @@ fn create_labels(mut commands: Commands, battle: Res<Battle>) {
 }
 fn update_labels(
     battle: Res<Battle>,
-    mut squads: Query<(&SquadLabel, &mut Transform, &mut Visibility), Without<ObjectiveLabel>>,
+    mut squads: Query<
+        (&SquadLabel, &mut Transform, &mut Visibility, &mut Text2d),
+        Without<ObjectiveLabel>,
+    >,
 ) {
-    for (label, mut transform, mut visibility) in &mut squads {
+    for (label, mut transform, mut visibility, mut text) in &mut squads {
         if let Some(squad) = battle.squads.get(label.0) {
+            let activity = if squad.supplies < 1.0 {
+                "OUT OF SUPPLY"
+            } else if squad
+                .soldiers
+                .iter()
+                .any(|soldier| soldier.cooldown > 0.0 && soldier.hp > 0.0)
+            {
+                "ENGAGED"
+            } else if !squad.orders.is_empty() {
+                "MOVING"
+            } else if squad.entrenched {
+                "DUG IN"
+            } else {
+                "HOLDING"
+            };
+            let label_text = format!("{}  /  {}", squad.callsign, activity);
+            if text.0 != label_text {
+                text.0 = label_text;
+            }
             transform.translation.x = squad.pos.x;
             transform.translation.y = squad.pos.y - 40.;
             *visibility = if squad.alive() {
@@ -311,7 +333,8 @@ fn pointer_controls(
         }
         pointer.current = None;
     }
-    if buttons.just_pressed(MouseButton::Right) && !blocked {
+    if buttons.just_pressed(MouseButton::Right) && !blocked && !battle.selected.is_empty() {
+        battle.order_count += 1;
         let target = battle
             .squads
             .iter()
@@ -424,6 +447,23 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
             color,
         );
     }
+    for effect in &battle.effects {
+        let alpha = (effect.ttl / 0.24).clamp(0.0, 1.0);
+        let direction = (effect.to - effect.from).normalize_or_zero();
+        let start = effect.from + direction * 28.0;
+        let end = effect.to - direction * 28.0;
+        gizmos.line_2d(start, end, effect.team.color().with_alpha(alpha * 0.9));
+        gizmos.circle_2d(
+            effect.from,
+            12.0 + (1.0 - alpha) * 10.0,
+            Color::srgba(1.0, 0.8, 0.4, alpha),
+        );
+        gizmos.circle_2d(
+            effect.to,
+            8.0 + (1.0 - alpha) * 12.0,
+            Color::srgba(1.0, 0.6, 0.3, alpha),
+        );
+    }
     for (i, squad) in battle.squads.iter().enumerate() {
         if !squad.alive() {
             continue;
@@ -437,6 +477,14 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
         }
         if selected {
             gizmos.circle_2d(p, 36., Color::srgb(0.95, 0.88, 0.48));
+        }
+        let background = Color::srgba(0.025, 0.045, 0.045, 0.92);
+        for y in -17..=17 {
+            gizmos.line_2d(
+                p + Vec2::new(-25., y as f32),
+                p + Vec2::new(25., y as f32),
+                background,
+            );
         }
         let a = p + Vec2::new(-23., -15.);
         let b = p + Vec2::new(23., 15.);
@@ -452,12 +500,26 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
             Vec2::new(b.x, a.y),
             color.with_alpha(0.9),
         );
+        for y in 17..=24 {
+            gizmos.line_2d(
+                p + Vec2::new(-11., y as f32),
+                p + Vec2::new(11., y as f32),
+                color,
+            );
+        }
         rect(
             &mut gizmos,
-            p + Vec2::new(-9., 15.),
-            p + Vec2::new(9., 21.),
-            color,
+            p + Vec2::new(-26., -18.),
+            p + Vec2::new(26., 18.),
+            border.with_alpha(0.65),
         );
+        if squad.entrenched {
+            gizmos.line_2d(
+                p + Vec2::new(-29., -20.),
+                p + Vec2::new(29., -20.),
+                Color::srgb(0.85, 0.78, 0.50),
+            );
+        }
         gizmos.line_2d(
             p + Vec2::new(-23., -22.),
             p + Vec2::new(23., -22.),

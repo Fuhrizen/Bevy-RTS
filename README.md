@@ -9,7 +9,8 @@ The starter contains an **18 × 12** tile map, two opposing groups of placeholde
 Install Rust stable (Bevy 0.20.1 requires Rust 1.97.1+) and the [Bevy Linux dependencies](https://bevy.org/learn/quick-start/getting-started/setup/) where appropriate.
 
 ```sh
-cargo run
+cargo run                               # Initial build and normal local run
+cargo fast                              # Opt-in Bevy dynamic linking for faster iteration
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -23,6 +24,16 @@ cargo test -p brevy-rts --all-targets
 `src/world.rs` is the Bevy rendering layer. `crates/brevy-core` contains engine-independent gameplay/grid rules with fast tests. Keep new business logic in the core crate when possible, leaving ECS/rendering/input integration in the Bevy application.
 
 Commit the generated `Cargo.lock` to guarantee repeatable Rust dependency resolution.
+
+### Why compilation can be slow
+
+Bevy's much-quoted **0.8–3 second** figure comes from its 2020 introduction. It measured *warm incremental* builds of examples with a fast-compile configuration, **not** compiling the Bevy engine on a fresh runner or generating fully optimised release binaries.
+
+For local editing, use `cargo fast` (an alias for `cargo run --features bevy/dynamic_linking`). This compiles the Bevy library dynamically and can reduce later incremental build/link time once the first full build is cached. It may still take several minutes the first time and requires platform-compatible dynamic library loading. Continue using `cargo run` for a standard development build.
+
+Canary uses a dedicated `[profile.canary]` that prioritises build speed (`opt-level = 1`, more codegen units) over peak runtime performance. It produces **Linux x86-64 only**, with an HTML Cargo compilation-timings report attached to the workflow run. The stable release continues using `--release` and produces Linux and Windows binaries with full release optimisations.
+
+Compiler options and linker speed vary by operating system and Rust version. Do not assume a clean GitHub Actions runner can achieve a sub-three-second release build.
 
 ## Validation
 
@@ -45,7 +56,7 @@ The workflow verifies an existing successful `main` **Linting** run for the exac
 A successful, push-triggered **Linting** run on `main` automatically updates the [rolling canary prerelease](https://github.com/Fuhrizen/Brevy-RTS/releases/tag/canary).
 
 - The **single** mutable `canary` tag always targets the latest validated `main` commit, and the existing prerelease is updated instead of creating historical canary releases.
-- Canary builds are packaged for Linux x86-64 and Windows x86-64. When executable-affecting files change, the workflow runs changed-code headless tests and rebuilds both; otherwise, it can advance the tag without recompiling or replacing identical assets.
+- Canary builds are packaged for **Linux x86-64 only**, using the faster canary profile. When executable-affecting files change, the workflow runs changed-code headless tests and rebuilds Linux; otherwise, it can advance the tag without recompiling or replacing identical assets. Existing Windows canary assets are removed on the next successful publication.
 - In-progress canary runs are superseded when a newer `main` run succeeds. The publish job double-checks the current `main` SHA before updating the tag.
 - Canary is always marked **prerelease** and **not latest**. Stable `vX.Y.Z` tags and releases are never modified by the canary pipeline.
 

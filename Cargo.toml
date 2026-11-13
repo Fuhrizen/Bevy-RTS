@@ -1,0 +1,19 @@
+[package]
+name = "brevy-rts"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "A Bevy-powered real-time strategy game"
+
+[dependencies]
+bevy = { version = "=0.20.1", default-features = false, features = [
+    "default_app",
+    "default_platform",
+    "2d_bevy_render",
+] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

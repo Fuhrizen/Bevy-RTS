@@ -412,6 +412,28 @@ mod tests {
     const DT: f32 = 1.0 / 64.0;
 
     #[test]
+    fn match_report_counts_ownership_and_living_soldiers_by_team() {
+        let mut battle = new_battle(&Roster::default());
+        battle.objectives[0].owner = Some(Team::Blue);
+        battle.objectives[1].owner = Some(Team::Red);
+        for soldier in &mut battle.squads[0].soldiers {
+            soldier.hp = 0.0;
+        }
+        battle.squads[4].soldiers[0].hp = 25.0;
+
+        let blue = battle.report(Team::Blue);
+        assert_eq!(blue.objectives, 1);
+        assert_eq!(blue.squads_remaining, 3);
+        assert_eq!(blue.soldiers_remaining, 24);
+        assert_eq!(blue.soldiers_deployed, 32);
+
+        let red = battle.report(Team::Red);
+        assert_eq!(red.objectives, 1);
+        assert_eq!(red.squads_remaining, 4);
+        assert_eq!(red.soldiers_remaining, red.soldiers_deployed);
+    }
+
+    #[test]
     fn roster_deploys_four_squads_and_six_neutral_objectives() {
         let mut roster = Roster::default();
         roster.squads[0].callsign = "Test".to_owned();

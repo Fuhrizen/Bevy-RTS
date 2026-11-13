@@ -514,9 +514,10 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
             r,
             Node {
                 position_type: PositionType::Absolute,
-                left: percent(39),
-                top: percent(30),
-                width: px(300),
+                left: percent(50),
+                margin: UiRect::left(px(-185)),
+                top: percent(15),
+                width: px(370),
                 ..panel()
             },
             |p| {
@@ -538,11 +539,48 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                     INK,
                 );
                 if battle.winner.is_some() || battle.draw {
-                    text(p, "The operation has concluded.", 13., MUTED);
+                    let seconds = battle.elapsed as u32;
+                    let reason = if battle.draw {
+                        "Both forces were wiped out.".to_owned()
+                    } else {
+                        format!(
+                            "{} secured all {} objectives.",
+                            battle.winner.map_or("", Team::label),
+                            battle.objectives.len()
+                        )
+                    };
+                    text(
+                        p,
+                        format!("{reason}  {:02}:{:02}", seconds / 60, seconds % 60),
+                        13.,
+                        MUTED,
+                    );
+                    for team in [Team::Blue, Team::Red] {
+                        let report = battle.report(team);
+                        text(
+                            p,
+                            format!(
+                                "{}  |  {} held  |  {} squads  |  {}/{} troops",
+                                team.label(),
+                                report.objectives,
+                                report.squads_remaining,
+                                report.soldiers_remaining,
+                                report.soldiers_deployed
+                            ),
+                            12.,
+                            team.color(),
+                        );
+                    }
                 } else {
                     button(p, "RESUME", Action::Resume, 210.);
+                    text(
+                        p,
+                        "Drag select  /  Ctrl+A select all\nShift + right-click queues waypoints\nCtrl+1-4 set group  /  1-4 recall\nWASD or arrows pan  /  wheel zoom",
+                        12.,
+                        MUTED,
+                    );
                 }
-                button(p, "RESTART OPERATION", Action::Restart, 210.);
+                button(p, "BACK TO LOADOUT", Action::Restart, 210.);
                 button(p, "EXIT TO MENU", Action::Exit, 210.);
             },
         );
@@ -906,6 +944,28 @@ mod tests {
         assert!(!app.world().resource::<Battle>().paused);
         press(&mut app, |action| matches!(action, Action::Select(0)));
         assert!(app.world().resource::<Battle>().selected.contains(&0));
+
+        {
+            let mut battle = app.world_mut().resource_mut::<Battle>();
+            for point in &mut battle.objectives {
+                point.owner = Some(Team::Blue);
+                point.capture = 1.0;
+            }
+            battle.winner = Some(Team::Blue);
+        }
+        app.update();
+        let world = app.world_mut();
+        let mut labels = world.query::<&Text>();
+        assert!(
+            labels
+                .iter(world)
+                .any(|text| text.0.contains("Blue secured all 6 objectives"))
+        );
+        press(&mut app, |action| matches!(action, Action::Restart));
+        press(&mut app, |action| matches!(action, Action::Deploy));
+        let battle = app.world().resource::<Battle>();
+        assert_eq!(battle.winner, None);
+        assert_eq!(battle.squads[0].kit, Kit::Support);
     }
 }
 

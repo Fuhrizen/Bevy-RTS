@@ -58,13 +58,20 @@ jobs:
             esac
           fi
           echo "rust_changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
           echo "Rust lint required: **$changed**" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check patch whitespace
         shell: bash
+        env:
+          BASE_SHA: ${{ steps.changes.outputs.base }}
+          HEAD_SHA: ${{ steps.changes.outputs.head }}
         run: |
-          git diff --check HEAD^ HEAD 2>/dev/null || \
-            git diff --check
+          set -euo pipefail
+          if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]]; then
+            git diff --check "$BASE_SHA" "$HEAD_SHA"
+          fi
 
       - name: Install Rust
         if: steps.changes.outputs.rust_changed == 'true'

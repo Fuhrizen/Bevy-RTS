@@ -1,7 +1,7 @@
 //! Minimal playable-world scaffold. Gameplay systems can grow into separate plugins.
 
 use bevy::prelude::*;
-use brevy_core::grid::{CELL_SIZE, COLUMNS, ROWS, tile_position};
+use brevy_core::grid;
 
 const CAMERA_SPEED: f32 = 420.0;
 
@@ -20,12 +20,12 @@ struct Unit;
 fn setup(mut commands: Commands) {
     commands.spawn(Camera2d);
 
-    for row in 0..ROWS {
-        for column in 0..COLUMNS {
-            let [x, y] = tile_position(column, row);
+    for row in 0..grid::ROWS {
+        for column in 0..grid::COLUMNS {
+            let [x, y] = grid::tile_position(column, row);
             let shade = if (row + column) % 2 == 0 { 0.20 } else { 0.23 };
             commands.spawn((
-                Sprite::from_color(Color::srgb(0.12, shade, 0.16), Vec2::splat(CELL_SIZE - 2.0)),
+                Sprite::from_color(Color::srgb(0.12, shade, 0.16), Vec2::splat(grid::CELL_SIZE - 2.0)),
                 Transform::from_xyz(x, y, 0.0),
             ));
         }
@@ -37,10 +37,10 @@ fn setup(mut commands: Commands) {
         (13, 6, Color::srgb(0.93, 0.55, 0.24)),
         (14, 6, Color::srgb(0.93, 0.55, 0.24)),
     ] {
-        let [x, y] = tile_position(column, row);
+        let [x, y] = grid::tile_position(column, row);
         commands.spawn((
             Unit,
-            Sprite::from_color(color, Vec2::splat(CELL_SIZE * 0.60)),
+            Sprite::from_color(color, Vec2::splat(grid::CELL_SIZE * 0.60)),
             Transform::from_xyz(x, y, 1.0),
         ));
     }

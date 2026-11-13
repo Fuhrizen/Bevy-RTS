@@ -1,30 +1,54 @@
 # Brevy RTS
 
-A minimal [Bevy](https://bevy.org) 0.20.1 Rust application. The `main` branch contains an empty Bevy starter and the CI/CD foundation. Gameplay will be added through reviewed feature branches.
+A Rust real-time strategy game built with [Bevy](https://bevy.org) 0.20.1.
 
-## Development
+The starter contains an **18 × 12** tile map, two opposing groups of placeholder units, and **WASD/arrow-key** camera controls.
 
-Install the current stable Rust toolchain (Bevy 0.20.1 requires Rust 1.97.1 or newer). On Linux, install the native dependencies described in the [Bevy setup guide](https://bevy.org/learn/quick-start/getting-started/setup/).
+## Local development
+
+Install Rust stable (Bevy 0.20.1 requires Rust 1.97.1+) and the [Bevy Linux dependencies](https://bevy.org/learn/quick-start/getting-started/setup/) where appropriate.
 
 ```sh
 cargo run
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Fast headless tests (no Bevy rendering dependency compiled)
+cargo test -p brevy-core --lib
+
+# Optional full Bevy app tests, much slower and not used by standard CI
+cargo test -p brevy-rts --all-targets
 ```
 
-Commit `Cargo.lock` once generated to make dependency resolution reproducible.
+`src/world.rs` is the Bevy rendering layer. `crates/brevy-core` contains engine-independent gameplay/grid rules with fast tests. Keep new business logic in the core crate when possible, leaving ECS/rendering/input integration in the Bevy application.
 
-## CI/CD
+Commit the generated `Cargo.lock` to guarantee repeatable Rust dependency resolution.
 
-- **Linting:** automatic on pull requests and pushes to `main`; checks formatting, Clippy, and tests.
-- **Tag release:** the **only** release entry point, run manually under **Actions → Tag release → Run workflow**, with branch **main** selected.
-- Choose **patch**, **minor**, or **major**. The workflow increments the highest existing `vX.Y.Z` tag (starting from `v0.0.0` when no tags exist). It verifies a successful existing `main` Linting run for the exact source commit (without running Linting again), builds Linux and Windows x86-64 binaries, then creates an annotated tag **only after both builds succeed** and publishes one GitHub release with generated commit/PR notes.
-- Pushing a tag manually does **not** start a release build. Only the manual workflow publishes releases.
-- Builds use the exact validated commit. Dependency versions are not changed automatically by the release workflow.
+## Validation
 
-## RTS starter world
+**Linting** is the required GitHub check for PRs and `main`:
 
-The game scaffold adds an 18 × 12 tile map and two opposing groups of placeholder units, rendered in 2D. Pan the camera with **WASD** or the **arrow keys**.
+- The workflow checks changed-file whitespace on every run.
+- Rust formatting and Clippy run only if Rust inputs changed (`src/`, `crates/`, `tests/`, Cargo manifests/lockfile, build scripts, Rust toolchain and Cargo configuration).
+- Documentation and workflow-only changes retain a successful **Linting** check without compiling Bevy.
+- Unit tests are **not** repeated on every PR or `main` push. Release workflows run headless tests when relevant code has changed since their previous channel version.
+- Every Linux and Windows release build still compiles the complete game as a final compile-time validation. Full Bevy integration tests may be run manually when needed.
 
-The map and units are deliberately visual placeholders. Selection, issuing orders, pathfinding, combat, resource systems and multiplayer will be separate gameplay features.
+## Stable releases
+
+Under **Actions → Tag release → Run workflow**, choose `patch`, `minor`, or `major` with `main` selected.
+
+The workflow verifies an existing successful `main` **Linting** run for the exact SHA, determines the next `vX.Y.Z` tag, runs headless tests only when testable changes occurred since the previous stable release, builds the full game on Linux and Windows, and creates an immutable-version GitHub release with generated notes. Tags are created **after** both builds succeed. The release workflow does not rerun the normal PR lint checks.
+
+## Canary releases
+
+A successful, push-triggered **Linting** run on `main` automatically updates the [rolling canary prerelease](https://github.com/Fuhrizen/Brevy-RTS/releases/tag/canary).
+
+- The **single** mutable `canary` tag always targets the latest validated `main` commit, and the existing prerelease is updated instead of creating historical canary releases.
+- Canary builds are packaged for Linux x86-64 and Windows x86-64. When executable-affecting files change, the workflow runs changed-code headless tests and rebuilds both; otherwise, it can advance the tag without recompiling or replacing identical assets.
+- In-progress canary runs are superseded when a newer `main` run succeeds. The publish job double-checks the current `main` SHA before updating the tag.
+- Canary is always marked **prerelease** and **not latest**. Stable `vX.Y.Z` tags and releases are never modified by the canary pipeline.
+
+To retain a particular canary build, archive its downloaded files separately before the next update. The `canary` tag is deliberately moved forward and must not be used as an immutable dependency.
+
+Only the manual **Tag release** workflow produces stable releases. Pushing a tag alone does not launch a release.

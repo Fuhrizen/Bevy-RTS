@@ -1,8 +1,35 @@
-# Brevy RTS
+# BEV Front
 
 A Rust real-time strategy game built with [Bevy](https://bevy.org) 0.20.1.
 
-The starter contains an **18 × 12** tile map, two opposing groups of placeholder units, and **WASD/arrow-key** camera controls.
+## Playtest
+
+Choose **Play**, configure four Blue infantry squads, and deploy against the Red AI.
+Capture all six objectives to win. A squad must stay in an objective's circle to
+capture it. Both sides in the circle pause capture. Owned objectives remain
+under your control when you leave.
+
+Each team's deployment zone replenishes supplies and treats surviving soldiers.
+Infantry automatically engages nearby opponents. The HUD shows selected squads'
+remaining manpower, equipment, and supplies. Use smoke or entrench to protect
+a squad while it holds position.
+
+| Input | Action |
+| --- | --- |
+| Left click or drag | Select a squad or box-select several |
+| Shift + select | Add squads to the selection |
+| Right click terrain | Move selected squads |
+| Shift + right click terrain | Queue another waypoint |
+| Right click Red squad | Focus it |
+| WASD or arrow keys | Pan |
+| Mouse wheel | Zoom |
+| Ctrl+A | Select all living Blue squads |
+| Ctrl+1–4 | Assign a control group |
+| 1–4 / Shift+1–4 | Recall a group / add it to the selection |
+| Esc | Pause or resume |
+
+Settings include opponent difficulty, borderless fullscreen, edge scrolling, and
+interface scale.
 
 ## Local development
 
@@ -21,7 +48,7 @@ cargo test -p brevy-core --lib
 cargo test -p brevy-rts --all-targets
 ```
 
-`src/world.rs` is the Bevy rendering layer. `crates/brevy-core` contains engine-independent gameplay/grid rules with fast tests. Keep new business logic in the core crate when possible, leaving ECS/rendering/input integration in the Bevy application.
+`src/world.rs` renders the map and handles battlefield input. `src/interface.rs` implements the menus and floating HUD. `src/battle.rs` resolves the match, `src/ai.rs` directs Red squads, and `src/model.rs` holds the shared state. `crates/brevy-core` retains the engine-independent grid helpers and fast tests.
 
 Commit the generated `Cargo.lock` to guarantee repeatable Rust dependency resolution.
 
@@ -53,7 +80,7 @@ The workflow verifies an existing successful `main` **Linting** run for the exac
 
 ## Canary releases
 
-A successful, push-triggered **Linting** run on `main` automatically updates the [rolling canary prerelease](https://github.com/Fuhrizen/Brevy-RTS/releases/tag/canary).
+A successful, push-triggered **Linting** run on `main` automatically updates the [rolling canary prerelease](https://github.com/Fuhrizen/Bevy-RTS/releases/tag/canary).
 
 - The **single** mutable `canary` tag always targets the latest validated `main` commit, and the existing prerelease is updated instead of creating historical canary releases.
 - Canary builds are packaged for **Linux x86-64 only**, using the faster canary profile. When executable-affecting files change, the workflow runs changed-code headless tests and rebuilds Linux; otherwise, it can advance the tag without recompiling or replacing identical assets. Existing Windows canary assets are removed on the next successful publication.

@@ -10,11 +10,13 @@ members = ["crates/brevy-core"]
 resolver = "3"
 
 [dependencies]
-brevy-core = { path = "crates/brevy-core" }
 bevy = { version = "=0.20.1", default-features = false, features = [
     "default_app",
     "default_platform",
     "2d_bevy_render",
+    "ui_bevy_render",
+    "ui_picking",
+    "bevy_ui_widgets",
 ] }
 
 [profile.dev]

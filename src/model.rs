@@ -256,3 +256,32 @@ pub struct Battle {
     pub paused: bool,
     pub selected: BTreeSet<usize>,
 }
+
+/// Team totals calculated from the final simulation snapshot.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TeamReport {
+    pub objectives: usize,
+    pub squads_remaining: usize,
+    pub soldiers_remaining: usize,
+    pub soldiers_deployed: usize,
+}
+
+impl Battle {
+    pub fn report(&self, team: Team) -> TeamReport {
+        let mut report = TeamReport {
+            objectives: self
+                .objectives
+                .iter()
+                .filter(|point| point.owner == Some(team))
+                .count(),
+            ..default()
+        };
+        for squad in self.squads.iter().filter(|squad| squad.team == team) {
+            let remaining = squad.manpower();
+            report.squads_remaining += usize::from(remaining > 0);
+            report.soldiers_remaining += remaining;
+            report.soldiers_deployed += squad.soldiers.len();
+        }
+        report
+    }
+}

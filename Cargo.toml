@@ -22,3 +22,12 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Canary is an expendable preview build: faster to compile than the fully
+# optimised, distributable stable release profile.
+[profile.canary]
+inherits = "release"
+opt-level = 1
+codegen-units = 32
+lto = false
+strip = "debuginfo"

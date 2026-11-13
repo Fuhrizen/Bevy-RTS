@@ -1,0 +1,4 @@
+# Optional fast local development without changing release builds.
+# Dynamic linking is deliberately opt-in; do not ship binaries compiled this way.
+[alias]
+fast = "run --features bevy/dynamic_linking"

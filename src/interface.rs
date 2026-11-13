@@ -373,7 +373,8 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                 Pickable::IGNORE,
                 Node {
                     flex_direction: FlexDirection::Row,
-                    column_gap: px(12),
+                    justify_content: JustifyContent::SpaceBetween,
+                    column_gap: px(5),
                     ..default()
                 },
             ))
@@ -723,8 +724,8 @@ fn refresh_battle(
         battle_panels(&mut commands, r, &battle);
     }
 }
-fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text)>) {
-    for (marker, mut text) in &mut labels {
+fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text, &mut TextColor)>) {
+    for (marker, mut text, mut color) in &mut labels {
         let value = match *marker {
             HudText::Tally => format!(
                 "{:02}:{:02}  |  {}/{} HELD",
@@ -741,18 +742,11 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text)>) {
                 .objectives
                 .get(i)
                 .map(|o| {
+                    color.set_if_neq(TextColor(o.display_color()));
                     format!(
-                        "{} {}",
+                        "{}\n{}",
                         ["NW", "N", "NE", "SW", "S", "SE"][i],
-                        if o.contested {
-                            "!"
-                        } else if o.owner == Some(Team::Blue) {
-                            "+"
-                        } else if o.owner == Some(Team::Red) {
-                            "-"
-                        } else {
-                            "."
-                        }
+                        o.capture_label()
                     )
                 })
                 .unwrap_or_default(),

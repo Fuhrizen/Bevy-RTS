@@ -407,11 +407,8 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
         gizmos.line_2d(cross - Vec2::Y * 11., cross + Vec2::Y * 11., team.color());
     }
     for objective in &battle.objectives {
-        let color = objective
-            .owner
-            .map(|t| t.color())
-            .unwrap_or(Color::srgb(0.70, 0.72, 0.60));
-        gizmos.circle_2d(objective.pos, CAPTURE_RADIUS, color.with_alpha(0.32));
+        let color = objective.display_color();
+        gizmos.circle_2d(objective.pos, CAPTURE_RADIUS, color.with_alpha(0.58));
         if objective.contested {
             gizmos.circle_2d(
                 objective.pos,

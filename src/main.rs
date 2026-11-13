@@ -2,6 +2,7 @@ mod ai;
 mod battle;
 mod interface;
 mod model;
+mod sound;
 mod terrain;
 mod world;
 
@@ -41,6 +42,7 @@ fn configure(app: &mut App) {
         battle::BattlePlugin,
         world::WorldPlugin,
         interface::UiPlugin,
+        sound::SoundPlugin,
     ))
     .add_systems(Update, apply_display_settings);
 }

@@ -45,7 +45,8 @@ enum HudText {
     Squad(usize),
     Selected,
     Detail,
-    Roles,
+    Soldier(usize),
+    Equipment,
     Pause,
 }
 fn dynamic(p: &mut ChildSpawnerCommands, marker: HudText, size: f32, color: Color) {
@@ -77,7 +78,14 @@ impl Plugin for UiPlugin {
             .add_systems(OnExit(Screen::Battle), clear_ui)
             .add_systems(
                 Update,
-                (button_feedback, actions, refresh_battle, update_hud).chain(),
+                (
+                    button_feedback,
+                    actions,
+                    refresh_battle,
+                    update_hud,
+                    update_rings,
+                )
+                    .chain(),
             );
     }
 }
@@ -352,17 +360,28 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
         r,
         Node {
             position_type: PositionType::Absolute,
-            left: px(18),
-            top: px(18),
-            width: px(236),
+            left: percent(50),
+            margin: UiRect::left(px(-190)),
+            top: px(12),
+            width: px(380),
+            padding: UiRect::all(px(10)),
             ..panel()
         },
         |p| {
-            text(p, "OPERATION  /  SECTOR CONTROL", 11., BLUE);
-            dynamic(p, HudText::Tally, 19., INK);
-            for i in 0..battle.objectives.len() {
-                dynamic(p, HudText::Objective(i), 11., INK);
-            }
+            dynamic(p, HudText::Tally, 16., INK);
+            p.spawn((
+                Pickable::IGNORE,
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(12),
+                    ..default()
+                },
+            ))
+            .with_children(|row| {
+                for i in 0..battle.objectives.len() {
+                    dynamic(row, HudText::Objective(i), 11., INK);
+                }
+            });
         },
     );
     block(
@@ -370,25 +389,13 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
         r,
         Node {
             position_type: PositionType::Absolute,
-            right: px(18),
-            top: px(18),
-            width: px(210),
+            right: px(14),
+            top: px(12),
+            padding: UiRect::all(px(8)),
             ..panel()
         },
         |p| {
-            text(p, "FIELD GUIDE", 11., GOLD);
-            text(
-                p,
-                "LMB  Select / drag\nRMB  Move / attack\nSHIFT  Add / queue\nCTRL + 1-4  Set group\n1-4  Recall group\nWASD / EDGE  Pan\nWHEEL  Zoom",
-                12.,
-                INK,
-            );
-            button(
-                p,
-                if battle.paused { "RESUME" } else { "PAUSE" },
-                Action::Pause,
-                150.,
-            );
+            button(p, "PAUSE", Action::Pause, 88.);
         },
     );
     block(
@@ -396,42 +403,23 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
         r,
         Node {
             position_type: PositionType::Absolute,
-            left: px(18),
-            bottom: px(18),
-            width: px(405),
+            left: px(12),
+            bottom: px(12),
+            width: percent(23),
+            padding: UiRect::all(px(10)),
+            row_gap: px(5),
             ..panel()
         },
         |p| {
-            text(p, "BLUE FORCE  /  SQUAD STATUS", 11., BLUE);
-            for (i, s) in battle
+            text(p, "SQUADS", 11., BLUE);
+            for (i, _) in battle
                 .squads
                 .iter()
                 .enumerate()
                 .filter(|(_, s)| s.team == Team::Blue)
             {
-                let selected = if battle.selected.contains(&i) {
-                    ">"
-                } else {
-                    " "
-                };
-                button(
-                    p,
-                    format!(
-                        "{} {}   {}   {}/{}   {:.0}% SUPPLY",
-                        selected,
-                        s.callsign.to_uppercase(),
-                        s.kit.label().to_uppercase(),
-                        s.manpower(),
-                        s.soldiers.len(),
-                        s.supplies
-                    ),
-                    Action::Select(i),
-                    350.,
-                );
+                button(p, "", Action::Select(i), 0.);
             }
-            dynamic(p, HudText::Selected, 13., GOLD);
-            dynamic(p, HudText::Detail, 12., INK);
-            dynamic(p, HudText::Roles, 10., MUTED);
         },
     );
     block(
@@ -439,38 +427,84 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
         r,
         Node {
             position_type: PositionType::Absolute,
-            right: px(18),
-            bottom: px(18),
-            width: px(310),
+            left: percent(25),
+            bottom: px(12),
+            width: percent(48),
+            padding: UiRect::all(px(10)),
+            row_gap: px(5),
             ..panel()
         },
         |p| {
-            text(p, "COMMANDS  /  SELECTED FORCE", 11., BLUE);
+            dynamic(p, HudText::Selected, 14., GOLD);
+            dynamic(p, HudText::Detail, 12., INK);
+            dynamic(p, HudText::Equipment, 11., BLUE);
             p.spawn((
                 Pickable::IGNORE,
                 Node {
                     flex_direction: FlexDirection::Row,
-                    column_gap: px(6),
+                    column_gap: px(8),
                     ..default()
                 },
             ))
             .with_children(|row| {
-                button(row, "HOLD", Action::Hold, 80.);
-                button(row, "DIG IN", Action::Entrench, 80.);
+                for col in 0..2 {
+                    row.spawn((
+                        Pickable::IGNORE,
+                        Node {
+                            width: percent(49),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(3),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|column| {
+                        for i in 0..5 {
+                            soldier_row(column, col * 5 + i);
+                        }
+                    });
+                }
+            });
+        },
+    );
+    block(
+        commands,
+        r,
+        Node {
+            position_type: PositionType::Absolute,
+            right: px(12),
+            bottom: px(12),
+            width: percent(24),
+            padding: UiRect::all(px(10)),
+            row_gap: px(5),
+            ..panel()
+        },
+        |p| {
+            text(p, "ORDERS", 11., BLUE);
+            p.spawn((
+                Pickable::IGNORE,
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(5),
+                    ..default()
+                },
+            ))
+            .with_children(|row| {
+                button(row, "HOLD", Action::Hold, 68.);
+                button(row, "DIG IN", Action::Entrench, 68.);
             });
             p.spawn((
                 Pickable::IGNORE,
                 Node {
                     flex_direction: FlexDirection::Row,
-                    column_gap: px(6),
+                    column_gap: px(5),
                     ..default()
                 },
             ))
             .with_children(|row| {
-                button(row, "SMOKE", Action::Smoke, 80.);
-                button(row, "RESUPPLY", Action::Resupply, 95.);
+                button(row, "SMOKE", Action::Smoke, 68.);
+                button(row, "RESUPPLY", Action::Resupply, 68.);
             });
-            text(p, "RIGHT CLICK GROUND TO MOVE", 10., MUTED);
+            text(p, "RMB MOVE / SHIFT QUEUE", 10., MUTED);
         },
     );
     if battle.paused || battle.winner.is_some() || battle.draw {
@@ -708,16 +742,16 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text)>) {
                 .get(i)
                 .map(|o| {
                     format!(
-                        "{}    {}",
-                        o.name.to_uppercase(),
+                        "{} {}",
+                        ["NW", "N", "NE", "SW", "S", "SE"][i],
                         if o.contested {
-                            "CONTESTED"
+                            "!"
                         } else if o.owner == Some(Team::Blue) {
-                            "FRIENDLY"
+                            "+"
                         } else if o.owner == Some(Team::Red) {
-                            "HOSTILE"
+                            "-"
                         } else {
-                            "NEUTRAL"
+                            "."
                         }
                     )
                 })
@@ -727,14 +761,13 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text)>) {
                 .get(i)
                 .map(|s| {
                     format!(
-                        "{} {}   {}   {}/{}   {:.0}% SUPPLY",
+                        "{} {}  {}/{}  {:.0}%",
                         if battle.selected.contains(&i) {
                             ">"
                         } else {
                             " "
                         },
                         s.callsign.to_uppercase(),
-                        s.kit.label().to_uppercase(),
                         s.manpower(),
                         s.soldiers.len(),
                         s.supplies
@@ -769,27 +802,47 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text)>) {
                     )
                 })
                 .unwrap_or_default(),
-            HudText::Roles => battle
+            HudText::Equipment => battle
                 .selected
                 .iter()
                 .next()
                 .and_then(|i| battle.squads.get(*i))
                 .map(|s| {
-                    s.soldiers
-                        .iter()
-                        .filter(|x| x.hp > 0. && x.hp < 100.)
-                        .take(3)
-                        .map(|x| {
-                            format!(
-                                "{} #{} {:.0} HP V{}",
-                                x.role.label(),
-                                x.id + 1,
-                                x.hp,
-                                x.veterancy
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" / ")
+                    match s.kit {
+                        Kit::Rifle => "RIFLE KIT  /  SMOKE",
+                        Kit::Support => "SUPPORT KIT  /  SMOKE",
+                        Kit::Scout => "SCOUT KIT  /  SMOKE",
+                        Kit::Medic => "MEDIC KIT  /  SMOKE",
+                    }
+                    .to_owned()
+                })
+                .unwrap_or_default(),
+            HudText::Soldier(index) => battle
+                .selected
+                .iter()
+                .next()
+                .and_then(|i| battle.squads.get(*i))
+                .and_then(|s| s.soldiers.get(index).map(|soldier| (s, soldier)))
+                .map(|(s, soldier)| {
+                    let state = if soldier.hp <= 0.0 {
+                        "KIA"
+                    } else if soldier.cooldown > 0.0 {
+                        "COOLDOWN"
+                    } else if !s.orders.is_empty() {
+                        "MOVING"
+                    } else if s.entrenched {
+                        "DUG IN"
+                    } else {
+                        "READY"
+                    };
+                    format!(
+                        "{:02} {}  {}  {:.0}HP V{}",
+                        soldier.id + 1,
+                        soldier.role.label(),
+                        state,
+                        soldier.hp,
+                        soldier.veterancy
+                    )
                 })
                 .unwrap_or_default(),
             HudText::Pause => {
@@ -859,5 +912,81 @@ mod tests {
         assert!(!app.world().resource::<Battle>().paused);
         press(&mut app, |action| matches!(action, Action::Select(0)));
         assert!(app.world().resource::<Battle>().selected.contains(&0));
+    }
+}
+
+#[derive(Component)]
+struct RingDot {
+    soldier: usize,
+    step: usize,
+}
+
+fn soldier_row(parent: &mut ChildSpawnerCommands, soldier: usize) {
+    parent
+        .spawn((
+            Pickable::IGNORE,
+            Node {
+                align_items: AlignItems::Center,
+                column_gap: px(5),
+                min_height: px(17),
+                ..default()
+            },
+        ))
+        .with_children(|row| {
+            row.spawn((
+                Pickable::IGNORE,
+                Node {
+                    width: px(16),
+                    height: px(16),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+            ))
+            .with_children(|ring| {
+                for step in 0..12 {
+                    let angle = step as f32 * std::f32::consts::TAU / 12.0;
+                    ring.spawn((
+                        RingDot { soldier, step },
+                        Pickable::IGNORE,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(6.0 + angle.sin() * 6.0),
+                            top: px(6.0 - angle.cos() * 6.0),
+                            width: px(3),
+                            height: px(3),
+                            border_radius: BorderRadius::MAX,
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ));
+                }
+            });
+            dynamic(row, HudText::Soldier(soldier), 11., INK);
+        });
+}
+
+fn update_rings(battle: Res<Battle>, mut dots: Query<(&RingDot, &mut BackgroundColor)>) {
+    let squad = battle
+        .selected
+        .iter()
+        .next()
+        .and_then(|i| battle.squads.get(*i));
+    for (dot, mut color) in &mut dots {
+        let next = squad
+            .and_then(|s| s.soldiers.get(dot.soldier).map(|soldier| (s.kit, soldier)))
+            .map_or(Color::NONE, |(kit, soldier)| {
+                let duration = if kit == Kit::Support { 0.85 } else { 1.2 };
+                let progress = 1.0 - soldier.cooldown / duration;
+                if soldier.hp <= 0.0 {
+                    Color::srgb(0.75, 0.25, 0.25)
+                } else if soldier.cooldown == 0.0 {
+                    BLUE
+                } else if dot.step as f32 / 12.0 < progress {
+                    GOLD
+                } else {
+                    Color::srgb(0.25, 0.30, 0.30)
+                }
+            });
+        color.set_if_neq(BackgroundColor(next));
     }
 }

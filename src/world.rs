@@ -126,27 +126,20 @@ fn create_labels(mut commands: Commands, battle: Res<Battle>) {
 fn update_labels(
     battle: Res<Battle>,
     mut squads: Query<
-        (&SquadLabel, &mut Transform, &mut Visibility, &mut Text2d),
+        (
+            &SquadLabel,
+            &mut Transform,
+            &mut Visibility,
+            &mut Text2d,
+            &mut TextColor,
+        ),
         Without<ObjectiveLabel>,
     >,
 ) {
-    for (label, mut transform, mut visibility, mut text) in &mut squads {
+    for (label, mut transform, mut visibility, mut text, mut tint) in &mut squads {
         if let Some(squad) = battle.squads.get(label.0) {
-            let activity = if squad.supplies < 1.0 {
-                "OUT OF SUPPLY"
-            } else if squad
-                .soldiers
-                .iter()
-                .any(|soldier| soldier.cooldown > 0.0 && soldier.hp > 0.0)
-            {
-                "ENGAGED"
-            } else if !squad.orders.is_empty() {
-                "MOVING"
-            } else if squad.entrenched {
-                "DUG IN"
-            } else {
-                "HOLDING"
-            };
+            let (activity, color) = squad.marker_status();
+            tint.set_if_neq(TextColor(color));
             let label_text = format!("{}  /  {}", squad.callsign, activity);
             if text.0 != label_text {
                 text.0 = label_text;
@@ -369,6 +362,7 @@ fn pointer_controls(
                         squad.orders.clear();
                     }
                     squad.focus = Some(target);
+                    squad.hold_fire = false;
                     squad.entrenched = false;
                     let direction = (squad.pos - enemy).normalize_or_zero();
                     if squad.pos.distance(enemy) > 200.0 {
@@ -556,8 +550,32 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
         gizmos.line_2d(
             p + Vec2::new(-23., -27.),
             p + Vec2::new(-23. + 46. * (squad.supplies / 100.).clamp(0., 1.), -27.),
-            Color::srgb(0.84, 0.72, 0.42),
+            if squad.supplies <= 20.0 {
+                Color::srgb(1., 0.42, 0.26)
+            } else {
+                Color::srgb(0.84, 0.72, 0.42)
+            },
         );
+        let (_, status_color) = squad.marker_status();
+        let badge = p + Vec2::new(33., 12.);
+        let offsets = [Vec2::Y, Vec2::X, Vec2::NEG_Y, Vec2::NEG_X, Vec2::Y];
+        for edge in offsets.windows(2) {
+            gizmos.line_2d(badge + edge[0] * 7., badge + edge[1] * 7., status_color);
+        }
+        if squad.engaged() {
+            let pulse = (battle.elapsed * 8.).sin() * 0.22 + 0.55;
+            gizmos.circle_2d(p, 30., Color::srgba(1., 0.48, 0.25, pulse));
+        }
+        if selected
+            && let Some(enemy) = squad
+                .focus
+                .and_then(|j| battle.squads.get(j))
+                .filter(|s| s.alive())
+        {
+            let focus = Color::srgba(1., 0.44, 0.30, 0.72);
+            gizmos.line_2d(p, enemy.pos, focus);
+            gizmos.circle_2d(enemy.pos, 42., focus);
+        }
         if selected {
             let mut previous = p;
             for point in &squad.orders {

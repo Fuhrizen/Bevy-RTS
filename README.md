@@ -110,3 +110,9 @@ Green rings mark cover, which reduces incoming damage by 25%. The north and
 south depots replenish supply while friendly and uncontested. Resupply directs
 selected squads to the nearest available depot or home base. Home bases also
 restore health. Toggle Hold Fire applies one fire policy to all selected squads.
+
+Matches start at 0.65x simulation speed. Use the pace controls to switch to 1x
+or enter planning pause. Space toggles planning pause and restores your last
+running speed. You can still move the camera, select squads, and issue orders
+in planning pause. The squad marker and selected-squad panel show the current
+condition. Selected attack orders draw a line and a ring around their target.

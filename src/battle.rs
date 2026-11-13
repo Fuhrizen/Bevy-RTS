@@ -108,6 +108,8 @@ fn new_battle(roster: &Roster) -> Battle {
         volley_count: 0,
         order_count: 0,
         paused: false,
+        pace: Pace::default(),
+        resume_pace: Pace::default(),
         selected: BTreeSet::new(),
     }
 }
@@ -225,7 +227,10 @@ pub(crate) fn supply_destination(objectives: &[Objective], team: Team, point: Ve
 }
 
 fn simulate(time: Res<Time<Fixed>>, settings: Res<Settings>, mut battle: ResMut<Battle>) {
-    step_battle(&mut battle, settings.difficulty, time.delta_secs());
+    let dt = time.delta_secs() * battle.pace.factor();
+    if dt > 0.0 {
+        step_battle(&mut battle, settings.difficulty, dt);
+    }
 }
 
 fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {

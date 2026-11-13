@@ -1,4 +1,4 @@
-use crate::model::{Battle, Difficulty, HudBlock, Kit, Roster, Screen, Settings, Team};
+use crate::model::{Battle, Difficulty, HudBlock, Kit, Pace, Roster, Screen, Settings, Team};
 use crate::operation::{CONTROL_TARGET, Finish, Mode, PERSONNEL_LIMIT, TIMED_LIMIT};
 use bevy::{
     ecs::system::SystemParam,
@@ -34,6 +34,7 @@ enum Action {
     Pause,
     Hold,
     FireControl,
+    Pace(Pace),
     Entrench,
     Smoke,
     Resupply,
@@ -51,6 +52,8 @@ enum HudText {
     Detail,
     Soldier(usize),
     Equipment,
+    Pace,
+    CommandHint,
     Pause,
 }
 fn dynamic(p: &mut ChildSpawnerCommands, marker: HudText, size: f32, color: Color) {
@@ -423,7 +426,21 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
             ..panel()
         },
         |p| {
-            button(p, "PAUSE", Action::Pause, 88.);
+            dynamic(p, HudText::Pace, 11., BLUE);
+            p.spawn((
+                Pickable::IGNORE,
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: px(4),
+                    ..default()
+                },
+            ))
+            .with_children(|row| {
+                for pace in [Pace::Planning, Pace::Deliberate, Pace::Normal] {
+                    button(row, pace.label(), Action::Pace(pace), 48.);
+                }
+            });
+            button(p, "MENU", Action::Pause, 88.);
         },
     );
     block(
@@ -533,12 +550,7 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                 button(row, "RESUPPLY", Action::Resupply, 68.);
             });
             button(p, "TOGGLE HOLD FIRE", Action::FireControl, 90.);
-            text(
-                p,
-                "RMB MOVE / SHIFT QUEUE\n+ DEPOTS / GREEN RINGS COVER",
-                10.,
-                MUTED,
-            );
+            dynamic(p, HudText::CommandHint, 10., MUTED);
         },
     );
     if battle.paused || battle.winner.is_some() || battle.draw {
@@ -629,7 +641,7 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                     button(p, "RESUME", Action::Resume, 210.);
                     text(
                         p,
-                        "Drag select  /  Ctrl+A select all\nShift + right-click queues waypoints\nCtrl+1-4 set group  /  1-4 recall\nWASD or arrows pan  /  wheel zoom",
+                        "Drag select  /  Ctrl+A select all\nShift + right-click queues waypoints\nCtrl+1-4 set group  /  1-4 recall\nWASD or arrows pan  /  wheel zoom\nSpace toggles planning pause",
                         12.,
                         MUTED,
                     );
@@ -669,12 +681,26 @@ fn actions(
     {
         battle.paused = !battle.paused;
     }
+    if *screen.get() == Screen::Battle
+        && !battle.paused
+        && battle.winner.is_none()
+        && !battle.draw
+        && keys.just_pressed(KeyCode::Space)
+    {
+        let pace = if battle.pace == Pace::Planning {
+            battle.resume_pace
+        } else {
+            Pace::Planning
+        };
+        battle.set_pace(pace);
+    }
     let mut redraw = false;
     for QueuedAction(action) in actions.read() {
         if (battle.paused || battle.winner.is_some() || battle.draw)
             && matches!(
                 *action,
                 Action::Hold
+                    | Action::Pace(_)
                     | Action::FireControl
                     | Action::Entrench
                     | Action::Smoke
@@ -766,6 +792,7 @@ fn actions(
                     }
                 }
             }
+            Action::Pace(pace) => battle.set_pace(pace),
             Action::FireControl => crate::battle::toggle_fire_control(&mut battle),
             Action::Entrench => crate::battle::toggle_entrench(&mut battle),
             Action::Smoke => crate::battle::deploy_smoke(&mut battle),
@@ -824,6 +851,27 @@ fn refresh_battle(
 fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text, &mut TextColor)>) {
     for (marker, mut text, mut color) in &mut labels {
         let value = match *marker {
+            HudText::CommandHint => {
+                let count = battle.selected.len();
+                if count == 0 {
+                    "SELECT A SQUAD TO GIVE ORDERS".into()
+                } else {
+                    let queued: usize = battle
+                        .selected
+                        .iter()
+                        .filter_map(|&i| battle.squads.get(i))
+                        .map(|squad| squad.orders.len())
+                        .sum();
+                    format!("{count} SELECTED  /  {queued} WAYPOINTS")
+                }
+            }
+            HudText::Pace => {
+                if battle.pace == Pace::Planning {
+                    "PLANNING  /  ORDERS ENABLED".into()
+                } else {
+                    format!("SPEED  {}", battle.pace.label())
+                }
+            }
             HudText::Tally => {
                 let seconds = if battle.mode == Mode::Timed {
                     (TIMED_LIMIT - battle.elapsed).max(0.0).ceil() as u32
@@ -903,7 +951,7 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text, &mut 
                         s.manpower(),
                         s.soldiers.len(),
                         s.supplies,
-                        if s.entrenched { "ENTRENCHED" } else { "MOBILE" }
+                        s.marker_status().0
                     )
                 })
                 .unwrap_or_default(),
@@ -956,7 +1004,7 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text, &mut 
                 if battle.paused {
                     "RESUME".into()
                 } else {
-                    "PAUSE".into()
+                    "MENU".into()
                 }
             }
         };
@@ -1023,6 +1071,19 @@ mod tests {
         assert!(app.world().resource::<Battle>().selected.contains(&0));
         press(&mut app, |action| matches!(action, Action::FireControl));
         assert!(app.world().resource::<Battle>().squads[0].hold_fire);
+        press(&mut app, |action| {
+            matches!(action, Action::Pace(Pace::Planning))
+        });
+        assert_eq!(app.world().resource::<Battle>().pace, Pace::Planning);
+        app.world_mut().resource_mut::<Battle>().squads[0]
+            .orders
+            .push_back(Vec2::ZERO);
+        press(&mut app, |action| matches!(action, Action::Hold));
+        assert!(app.world().resource::<Battle>().squads[0].orders.is_empty());
+        press(&mut app, |action| {
+            matches!(action, Action::Pace(Pace::Normal))
+        });
+        assert_eq!(app.world().resource::<Battle>().pace, Pace::Normal);
 
         {
             let mut battle = app.world_mut().resource_mut::<Battle>();

@@ -213,6 +213,35 @@ impl Squad {
             .count()
     }
 
+    pub fn engaged(&self) -> bool {
+        self.soldiers
+            .iter()
+            .any(|soldier| soldier.hp > 0.0 && soldier.cooldown > 0.0)
+    }
+
+    pub fn marker_status(&self) -> (&'static str, Color) {
+        const WARNING: Color = Color::srgb(1.0, 0.69, 0.30);
+        if self.supplies < 1.0 {
+            ("EMPTY", WARNING)
+        } else if self.supplies <= 20.0 {
+            ("LOW SUPPLY", WARNING)
+        } else if self.manpower() * 2 <= self.soldiers.len() {
+            ("LOW STRENGTH", WARNING)
+        } else if self.smoke > 0.0 {
+            ("SMOKE", Color::srgb(0.82, 0.88, 0.90))
+        } else if self.hold_fire {
+            ("HOLD FIRE", Color::srgb(0.75, 0.69, 1.0))
+        } else if self.engaged() {
+            ("ENGAGED", Color::srgb(1.0, 0.52, 0.30))
+        } else if !self.orders.is_empty() {
+            ("MOVING", Color::srgb(0.48, 0.86, 0.97))
+        } else if self.entrenched {
+            ("DUG IN", Color::srgb(0.63, 0.88, 0.57))
+        } else {
+            ("READY", self.team.color())
+        }
+    }
+
     pub fn alive(&self) -> bool {
         self.manpower() != 0
     }
@@ -265,6 +294,32 @@ pub struct VolleyEffect {
     pub ttl: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pace {
+    Planning,
+    #[default]
+    Deliberate,
+    Normal,
+}
+
+impl Pace {
+    pub fn factor(self) -> f32 {
+        match self {
+            Self::Planning => 0.0,
+            Self::Deliberate => 0.65,
+            Self::Normal => 1.0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Planning => "PLAN",
+            Self::Deliberate => "0.65x",
+            Self::Normal => "1x",
+        }
+    }
+}
+
 #[derive(Default, Resource)]
 pub struct Battle {
     pub squads: Vec<Squad>,
@@ -280,6 +335,8 @@ pub struct Battle {
     pub volley_count: u64,
     pub order_count: u64,
     pub paused: bool,
+    pub pace: Pace,
+    pub resume_pace: Pace,
     pub selected: BTreeSet<usize>,
 }
 
@@ -293,6 +350,13 @@ pub struct TeamReport {
 }
 
 impl Battle {
+    pub fn set_pace(&mut self, pace: Pace) {
+        if pace != Pace::Planning {
+            self.resume_pace = pace;
+        }
+        self.pace = pace;
+    }
+
     pub fn report(&self, team: Team) -> TeamReport {
         let mut report = TeamReport {
             objectives: self

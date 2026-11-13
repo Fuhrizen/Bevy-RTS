@@ -8,7 +8,12 @@ pub fn direct_red(mut battle: ResMut<Battle>) {
 }
 
 pub fn direct_squads(battle: &mut Battle) {
-    if battle.paused || battle.winner.is_some() || battle.draw || battle.objectives.is_empty() {
+    if battle.pace == Pace::Planning
+        || battle.paused
+        || battle.winner.is_some()
+        || battle.draw
+        || battle.objectives.is_empty()
+    {
         return;
     }
 

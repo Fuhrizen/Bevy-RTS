@@ -30,6 +30,7 @@ jobs:
       contents: read
     outputs:
       tag: ${{ steps.compute.outputs.tag }}
+      previous: ${{ steps.compute.outputs.previous }}
     steps:
       - name: Verify successful main Linting run
         shell: bash
@@ -68,6 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           latest="$(git tag -l 'v*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | sort -V | tail -n 1 || true)"
+          echo "previous=$latest" >> "$GITHUB_OUTPUT"
           latest="${latest:-v0.0.0}"
           IFS=. read -r major minor patch <<< "${latest#v}"
           case "$BUMP" in
@@ -84,9 +86,19 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Building **$tag** from commit ${GITHUB_SHA} (previous: $latest)" >> "$GITHUB_STEP_SUMMARY"
 
+  test:
+    name: Release tests
+    needs: version
+    uses: ./.github/workflows/release-tests.yml
+    with:
+      base_ref: ${{ needs.version.outputs.previous }}
+      head_sha: ${{ github.sha }}
+    permissions:
+      contents: read
+
   build:
     name: Build ${{ matrix.platform }}
-    needs: version
+    needs: [version, test]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:

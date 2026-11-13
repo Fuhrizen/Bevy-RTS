@@ -1,0 +1,78 @@
+name: Release tests
+
+on:
+  workflow_call:
+    inputs:
+      base_ref:
+        description: Previous stable or canary tag; empty means first release
+        required: false
+        type: string
+        default: ''
+      head_sha:
+        description: Commit SHA to test
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout release commit with history
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Find changes that need tests
+        id: changes
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$BASE_REF" ]]; then
+            testable=true
+          else
+            if ! git rev-parse -q --verify "refs/tags/${BASE_REF}^{commit}" >/dev/null; then
+              echo "::error::Previous release tag is missing: $BASE_REF"
+              exit 1
+            fi
+            set +e
+            git diff --quiet "$BASE_REF" "$HEAD_SHA" -- \
+              src/ crates/ tests/ Cargo.toml Cargo.lock \
+              rust-toolchain.toml build.rs .cargo/
+            result=$?
+            set -e
+            case "$result" in
+              0) testable=false ;;
+              1) testable=true ;;
+              *) echo "::error::Unable to compare release versions"; exit "$result" ;;
+            esac
+          fi
+          echo "testable=$testable" >> "$GITHUB_OUTPUT"
+          echo "Testable changes since ${BASE_REF:-initial release}: **$testable**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Rust
+        if: steps.changes.outputs.testable == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache headless test dependencies
+        if: steps.changes.outputs.testable == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/brevy-core
+
+      - name: Run headless game logic tests
+        if: steps.changes.outputs.testable == 'true'
+        run: cargo test -p brevy-core --lib
+
+      - name: Tests not required
+        if: steps.changes.outputs.testable == 'false'
+        run: echo "No testable source changes; release tests passed by change detection." >> "$GITHUB_STEP_SUMMARY"

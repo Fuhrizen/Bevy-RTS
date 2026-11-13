@@ -1,10 +1,8 @@
 //! Minimal playable-world scaffold. Gameplay systems can grow into separate plugins.
 
 use bevy::prelude::*;
+use brevy_core::grid::{CELL_SIZE, COLUMNS, ROWS, tile_position};
 
-const COLUMNS: u32 = 18;
-const ROWS: u32 = 12;
-const CELL_SIZE: f32 = 50.0;
 const CAMERA_SPEED: f32 = 420.0;
 
 pub struct WorldPlugin;
@@ -24,11 +22,11 @@ fn setup(mut commands: Commands) {
 
     for row in 0..ROWS {
         for column in 0..COLUMNS {
-            let position = tile_position(column, row);
+            let [x, y] = tile_position(column, row);
             let shade = if (row + column) % 2 == 0 { 0.20 } else { 0.23 };
             commands.spawn((
                 Sprite::from_color(Color::srgb(0.12, shade, 0.16), Vec2::splat(CELL_SIZE - 2.0)),
-                Transform::from_xyz(position.x, position.y, 0.0),
+                Transform::from_xyz(x, y, 0.0),
             ));
         }
     }
@@ -39,20 +37,13 @@ fn setup(mut commands: Commands) {
         (13, 6, Color::srgb(0.93, 0.55, 0.24)),
         (14, 6, Color::srgb(0.93, 0.55, 0.24)),
     ] {
-        let position = tile_position(column, row);
+        let [x, y] = tile_position(column, row);
         commands.spawn((
             Unit,
             Sprite::from_color(color, Vec2::splat(CELL_SIZE * 0.60)),
-            Transform::from_xyz(position.x, position.y, 1.0),
+            Transform::from_xyz(x, y, 1.0),
         ));
     }
-}
-
-fn tile_position(column: u32, row: u32) -> Vec2 {
-    Vec2::new(
-        (column as f32 - (COLUMNS - 1) as f32 / 2.0) * CELL_SIZE,
-        (row as f32 - (ROWS - 1) as f32 / 2.0) * CELL_SIZE,
-    )
 }
 
 fn pan_camera(
@@ -82,23 +73,3 @@ fn pan_camera(
         (movement.normalize_or_zero() * CAMERA_SPEED * time.delta_secs()).extend(0.0);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn grid_is_centred_around_origin() {
-        assert_eq!(tile_position(0, 0), Vec2::new(-425.0, -275.0));
-        assert_eq!(
-            tile_position(COLUMNS - 1, ROWS - 1),
-            Vec2::new(425.0, 275.0)
-        );
-    }
-
-    #[test]
-    fn neighbouring_tiles_are_spaced_evenly() {
-        let origin = tile_position(3, 5);
-        let next = tile_position(4, 5);
-        assert_eq!(next - origin, Vec2::new(CELL_SIZE, 0.0));
-    }
-}

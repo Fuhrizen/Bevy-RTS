@@ -1,0 +1,8 @@
+[package]
+name = "brevy-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Headless game-rule and grid logic for Brevy RTS"
+
+[dependencies]

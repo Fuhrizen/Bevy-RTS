@@ -46,6 +46,7 @@ enum HudText {
     Selected,
     Detail,
     Soldier(usize),
+    Equipment,
     Pause,
 }
 fn dynamic(p: &mut ChildSpawnerCommands, marker: HudText, size: f32, color: Color) {
@@ -404,7 +405,7 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
             position_type: PositionType::Absolute,
             left: px(12),
             bottom: px(12),
-            width: px(220),
+            width: percent(23),
             padding: UiRect::all(px(10)),
             row_gap: px(5),
             ..panel()
@@ -417,7 +418,7 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                 .enumerate()
                 .filter(|(_, s)| s.team == Team::Blue)
             {
-                button(p, "", Action::Select(i), 195.);
+                button(p, "", Action::Select(i), 0.);
             }
         },
     );
@@ -426,16 +427,17 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
         r,
         Node {
             position_type: PositionType::Absolute,
-            left: px(245),
+            left: percent(25),
             bottom: px(12),
-            width: px(390),
+            width: percent(48),
             padding: UiRect::all(px(10)),
             row_gap: px(5),
             ..panel()
         },
         |p| {
             dynamic(p, HudText::Selected, 14., GOLD);
-            dynamic(p, HudText::Detail, 11., INK);
+            dynamic(p, HudText::Detail, 12., INK);
+            dynamic(p, HudText::Equipment, 11., BLUE);
             p.spawn((
                 Pickable::IGNORE,
                 Node {
@@ -449,7 +451,7 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                     row.spawn((
                         Pickable::IGNORE,
                         Node {
-                            width: px(180),
+                            width: percent(49),
                             flex_direction: FlexDirection::Column,
                             row_gap: px(3),
                             ..default()
@@ -471,7 +473,7 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
             position_type: PositionType::Absolute,
             right: px(12),
             bottom: px(12),
-            width: px(220),
+            width: percent(24),
             padding: UiRect::all(px(10)),
             row_gap: px(5),
             ..panel()
@@ -487,8 +489,8 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                 },
             ))
             .with_children(|row| {
-                button(row, "HOLD", Action::Hold, 90.);
-                button(row, "DIG IN", Action::Entrench, 90.);
+                button(row, "HOLD", Action::Hold, 68.);
+                button(row, "DIG IN", Action::Entrench, 68.);
             });
             p.spawn((
                 Pickable::IGNORE,
@@ -499,8 +501,8 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                 },
             ))
             .with_children(|row| {
-                button(row, "SMOKE", Action::Smoke, 90.);
-                button(row, "RESUPPLY", Action::Resupply, 90.);
+                button(row, "SMOKE", Action::Smoke, 68.);
+                button(row, "RESUPPLY", Action::Resupply, 68.);
             });
             text(p, "RMB MOVE / SHIFT QUEUE", 10., MUTED);
         },
@@ -800,6 +802,21 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text)>) {
                     )
                 })
                 .unwrap_or_default(),
+            HudText::Equipment => battle
+                .selected
+                .iter()
+                .next()
+                .and_then(|i| battle.squads.get(*i))
+                .map(|s| {
+                    match s.kit {
+                        Kit::Rifle => "RIFLE KIT  /  SMOKE",
+                        Kit::Support => "SUPPORT KIT  /  SMOKE",
+                        Kit::Scout => "SCOUT KIT  /  SMOKE",
+                        Kit::Medic => "MEDIC KIT  /  SMOKE",
+                    }
+                    .to_owned()
+                })
+                .unwrap_or_default(),
             HudText::Soldier(index) => battle
                 .selected
                 .iter()
@@ -810,7 +827,7 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text)>) {
                     let state = if soldier.hp <= 0.0 {
                         "KIA"
                     } else if soldier.cooldown > 0.0 {
-                        "CYCLING"
+                        "COOLDOWN"
                     } else if !s.orders.is_empty() {
                         "MOVING"
                     } else if s.entrenched {
@@ -944,7 +961,7 @@ fn soldier_row(parent: &mut ChildSpawnerCommands, soldier: usize) {
                     ));
                 }
             });
-            dynamic(row, HudText::Soldier(soldier), 10., INK);
+            dynamic(row, HudText::Soldier(soldier), 11., INK);
         });
 }
 

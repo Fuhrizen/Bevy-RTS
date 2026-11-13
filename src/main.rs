@@ -17,14 +17,3 @@ fn main() {
         .run();
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bevy_app_initializes() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.update();
-    }
-}

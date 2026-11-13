@@ -16,4 +16,3 @@ fn main() {
         .add_plugins(world::WorldPlugin)
         .run();
 }
-

@@ -20,12 +20,13 @@ struct Unit;
 fn setup(mut commands: Commands) {
     commands.spawn(Camera2d);
 
+    let tile_size = Vec2::splat(grid::CELL_SIZE - 2.0);
     for row in 0..grid::ROWS {
         for column in 0..grid::COLUMNS {
             let [x, y] = grid::tile_position(column, row);
             let shade = if (row + column) % 2 == 0 { 0.20 } else { 0.23 };
             commands.spawn((
-                Sprite::from_color(Color::srgb(0.12, shade, 0.16), Vec2::splat(grid::CELL_SIZE - 2.0)),
+                Sprite::from_color(Color::srgb(0.12, shade, 0.16), tile_size),
                 Transform::from_xyz(x, y, 0.0),
             ));
         }
@@ -72,4 +73,3 @@ fn pan_camera(
     camera.translation +=
         (movement.normalize_or_zero() * CAMERA_SPEED * time.delta_secs()).extend(0.0);
 }
-

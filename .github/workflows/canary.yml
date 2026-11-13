@@ -83,21 +83,11 @@ jobs:
       contents: read
 
   build:
-    name: Build canary ${{ matrix.platform }}
+    name: Build canary Linux x86-64
     needs: [prepare, tests]
     if: needs.prepare.outputs.rebuild == 'true'
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux-x86_64
-            runner: ubuntu-24.04
-            executable: brevy-rts
-          - platform: windows-x86_64
-            runner: windows-2022
-            executable: brevy-rts.exe
     steps:
       - name: Checkout validated main
         uses: actions/checkout@v7
@@ -111,10 +101,9 @@ jobs:
       - name: Cache release dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.platform }}-canary
+          key: linux-x86_64-canary
 
       - name: Install Linux libraries
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -122,29 +111,30 @@ jobs:
             libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
 
       - name: Compile canary
-        run: cargo build --release
+        run: cargo build --profile canary --timings
 
-      - name: Package canary executable
+      - name: Package canary Linux executable
         shell: bash
-        env:
-          PLATFORM: ${{ matrix.platform }}
-          EXECUTABLE: ${{ matrix.executable }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          archive="brevy-rts-canary-${PLATFORM}"
-          if [[ "$PLATFORM" == windows-* ]]; then
-            7z a "dist/${archive}.zip" "target/release/${EXECUTABLE}"
-          else
-            tar -czf "dist/${archive}.tar.gz" -C target/release "$EXECUTABLE"
-          fi
+          tar -czf dist/brevy-rts-canary-linux-x86_64.tar.gz -C target/canary brevy-rts
 
-      - name: Upload canary binary
+      - name: Upload canary Linux binary
         uses: actions/upload-artifact@v7
         with:
-          name: canary-${{ matrix.platform }}
-          path: dist/*
+          name: canary-linux-x86_64
+          path: dist/brevy-rts-canary-linux-x86_64.tar.gz
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload compiler timing report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compile-timings-linux
+          path: target/cargo-timings/*.html
+          if-no-files-found: ignore
           retention-days: 7
 
   publish:
@@ -171,7 +161,7 @@ jobs:
         if: needs.prepare.outputs.rebuild == 'true'
         uses: actions/download-artifact@v8
         with:
-          pattern: canary-*
+          pattern: canary-linux-*
           merge-multiple: true
           path: dist
 
@@ -200,6 +190,10 @@ jobs:
           if gh release view canary >/dev/null 2>&1; then
             if [[ "$REBUILD" == "true" ]]; then
               gh release upload canary dist/* --clobber
+            fi
+            # Discontinue Windows artifacts left by earlier dual-platform canaries.
+            if gh release view canary --json assets --jq '.assets[].name' | grep -Fxq 'brevy-rts-canary-windows-x86_64.zip'; then
+              gh release delete-asset canary brevy-rts-canary-windows-x86_64.zip --yes
             fi
             gh release edit canary --title "Canary (${short_sha})" \
               --notes "$notes" --prerelease --latest=false --target "$TARGET_SHA"

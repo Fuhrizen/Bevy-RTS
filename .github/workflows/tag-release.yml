@@ -1,0 +1,191 @@
+name: Tag release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semantic version increment
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        required: true
+        default: patch
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brevy-release
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    name: Linting
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  version:
+    name: Calculate version
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.compute.outputs.tag }}
+    steps:
+      - name: Checkout validated commit and tags
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Calculate next semantic version
+        id: compute
+        shell: bash
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          latest="$(git tag -l 'v*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | sort -V | tail -n 1 || true)"
+          latest="${latest:-v0.0.0}"
+          IFS=. read -r major minor patch <<< "${latest#v}"
+          case "$BUMP" in
+            patch) patch=$((patch + 1)) ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            *) echo "::error::Unsupported version increment: $BUMP"; exit 1 ;;
+          esac
+          tag="v${major}.${minor}.${patch}"
+          if git show-ref --verify --quiet "refs/tags/${tag}"; then
+            echo "::error::Release tag already exists: $tag"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Building **$tag** from commit ${GITHUB_SHA} (previous: $latest)" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            executable: brevy-rts
+          - platform: windows-x86_64
+            runner: windows-2022
+            executable: brevy-rts.exe
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}-release
+
+      - name: Install Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            g++ pkg-config libx11-dev libasound2-dev libudev-dev \
+            libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+
+      - name: Compile binary
+        run: cargo build --release
+
+      - name: Package binary
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          PLATFORM: ${{ matrix.platform }}
+          EXECUTABLE: ${{ matrix.executable }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          archive="brevy-rts-${RELEASE_TAG}-${PLATFORM}"
+          if [[ "$PLATFORM" == windows-* ]]; then
+            7z a "dist/${archive}.zip" "target/release/${EXECUTABLE}"
+          else
+            tar -czf "dist/${archive}.tar.gz" -C target/release "$EXECUTABLE"
+          fi
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Tag and publish release
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Download release binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Create annotated release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --tags
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            existing_sha="$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")"
+            if [[ "$existing_sha" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag $RELEASE_TAG points to a different commit"
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* \
+              --title "$RELEASE_TAG" \
+              --generate-notes \
+              --verify-tag
+          fi

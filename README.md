@@ -18,7 +18,7 @@ Commit `Cargo.lock` once generated to make dependency resolution reproducible.
 ## CI/CD
 
 - **Linting:** automatic on pull requests and pushes to `main`; checks formatting, Clippy, and tests.
-- **Tag release:** the only release entry point, run manually under **Actions → Tag release → Run workflow** on `main`.
-- Choose **patch**, **minor**, or **major**. The workflow increments the highest existing `vX.Y.Z` tag (starting from `v0.0.0` when no tags exist), verifies the source, creates an annotated tag, builds Linux and Windows x86-64 binaries, and publishes them in a single GitHub release with automatically generated notes.
+- **Tag release:** the **only** release entry point, run manually under **Actions → Tag release → Run workflow**, with branch **main** selected.
+- Choose **patch**, **minor**, or **major**. The workflow increments the highest existing `vX.Y.Z` tag (starting from `v0.0.0` when no tags exist). It reuses Linting to validate the exact source commit, builds Linux and Windows x86-64 binaries, then creates an annotated tag **only after both builds succeed** and publishes one GitHub release with generated commit/PR notes.
 - Pushing a tag manually does **not** start a release build. Only the manual workflow publishes releases.
-- Builds use the exact tagged source commit; dependency versions are not changed automatically by the release action.
+- Builds use the exact validated commit. Dependency versions are not changed automatically by the release workflow.

@@ -22,3 +22,9 @@ Commit `Cargo.lock` once generated to make dependency resolution reproducible.
 - Choose **patch**, **minor**, or **major**. The workflow increments the highest existing `vX.Y.Z` tag (starting from `v0.0.0` when no tags exist). It reuses Linting to validate the exact source commit, builds Linux and Windows x86-64 binaries, then creates an annotated tag **only after both builds succeed** and publishes one GitHub release with generated commit/PR notes.
 - Pushing a tag manually does **not** start a release build. Only the manual workflow publishes releases.
 - Builds use the exact validated commit. Dependency versions are not changed automatically by the release workflow.
+
+## RTS starter world
+
+The game scaffold adds an 18 × 12 tile map and two opposing groups of placeholder units, rendered in 2D. Pan the camera with **WASD** or the **arrow keys**.
+
+The map and units are deliberately visual placeholders. Selection, issuing orders, pathfinding, combat, resource systems and multiplayer will be separate gameplay features.

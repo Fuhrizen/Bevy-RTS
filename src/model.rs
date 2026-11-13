@@ -204,6 +204,38 @@ pub struct Objective {
     pub contested: bool,
 }
 
+impl Objective {
+    pub fn display_color(&self) -> Color {
+        if self.contested {
+            return Color::srgb(1.0, 0.74, 0.34);
+        }
+        let team = if self.capture > 0.0 {
+            Some(Team::Blue)
+        } else if self.capture < 0.0 {
+            Some(Team::Red)
+        } else {
+            self.owner
+        };
+        team.map_or(Color::srgb(0.75, 0.78, 0.73), Team::color)
+    }
+
+    pub fn capture_label(&self) -> String {
+        if self.contested {
+            "TIED".into()
+        } else if let Some(team) = self.owner {
+            if self.capture.abs() < 1.0 {
+                "LOSING".into()
+            } else {
+                team.label().to_uppercase()
+            }
+        } else if self.capture == 0.0 {
+            "OPEN".into()
+        } else {
+            format!("{:.0}%", (self.capture.abs() * 100.0).floor())
+        }
+    }
+}
+
 pub struct VolleyEffect {
     pub from: Vec2,
     pub to: Vec2,

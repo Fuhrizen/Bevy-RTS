@@ -69,6 +69,7 @@ pub enum Mode {
     Conquest,
     Control,
     Timed,
+    Frontline,
 }
 
 impl Mode {
@@ -76,7 +77,8 @@ impl Mode {
         match self {
             Self::Conquest => Self::Control,
             Self::Control => Self::Timed,
-            Self::Timed => Self::Conquest,
+            Self::Timed => Self::Frontline,
+            Self::Frontline => Self::Conquest,
         }
     }
 
@@ -85,6 +87,7 @@ impl Mode {
             Self::Conquest => "Conquest",
             Self::Control => "Control",
             Self::Timed => "Timed",
+            Self::Frontline => "Frontline",
         }
     }
 
@@ -93,6 +96,9 @@ impl Mode {
             Self::Conquest => "Hold all six sectors to win.",
             Self::Control => "Uncontested sectors earn points. First to 480 wins.",
             Self::Timed => "Lead the control score when the 3-minute clock ends.",
+            Self::Frontline => {
+                "Project influence over flags. The sector majority drains enemy resolve."
+            }
         }
     }
 }
@@ -103,6 +109,7 @@ pub enum Finish {
     Score,
     Time,
     Elimination,
+    Resolve,
 }
 
 pub fn leader(values: [f32; 2]) -> Option<Team> {
@@ -131,3 +138,38 @@ pub fn in_cover(map: Map, point: Vec2) -> bool {
 }
 
 pub const DEPOTS: [usize; 2] = [1, 4];
+
+pub const RESOLVE: f32 = 150.0;
+pub const RESERVE_COST: f32 = 60.0;
+pub const RESERVE_UNLOCK: f32 = 45.0;
+
+#[derive(Clone, Copy)]
+pub struct Influence {
+    pub pos: Vec2,
+    pub team: Team,
+    pub weight: f32,
+}
+pub fn influence(squads: &[crate::model::Squad]) -> impl Iterator<Item = Influence> + '_ {
+    squads.iter().filter_map(|squad| {
+        let strength = squad.manpower();
+        (strength > 0).then_some(Influence {
+            pos: squad.pos,
+            team: squad.team,
+            weight: strength as f32,
+        })
+    })
+}
+pub fn territory(point: Vec2, field: &[Influence]) -> (Option<Team>, bool) {
+    let mut sides = [0.0; 2];
+    for emitter in field {
+        let weight = (1.0 - point.distance(emitter.pos) / 360.0).max(0.0) * emitter.weight;
+        sides[usize::from(emitter.team == Team::Red)] += weight;
+    }
+    let contested = sides[0].min(sides[1]) >= 0.5 && (sides[0] - sides[1]).abs() < 1.5;
+    let owner = if !contested && sides[0].max(sides[1]) >= 0.5 {
+        leader(sides)
+    } else {
+        None
+    };
+    (owner, contested)
+}

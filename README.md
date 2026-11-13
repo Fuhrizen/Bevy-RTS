@@ -116,3 +116,15 @@ or enter planning pause. Space toggles planning pause and restores your last
 running speed. You can still move the camera, select squads, and issue orders
 in planning pause. The squad marker and selected-squad panel show the current
 condition. Selected attack orders draw a line and a ring around their target.
+
+### Frontline mode
+
+Select **Frontline** in the loadout and choose a reserve kit. Squads project
+territory based on strength and distance. Sectors change hands when influence
+reaches the flag. Blue and Red hatching show territorial influence, and amber
+shows a contested boundary. A sector majority drains the opposing team's
+resolve. The match ends when one team runs out of resolve or is eliminated.
+
+Both sides start with 30 requisition points and gain one per simulation second.
+One six-person reserve squad can deploy at home from 45 seconds onward for
+60 points. Blue uses the chosen reserve kit, and Red receives Support.

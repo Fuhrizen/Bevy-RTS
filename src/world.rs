@@ -2,7 +2,7 @@
 use crate::model::{
     Battle, CAPTURE_RADIUS, HudBlock, MAP_HALF, SUPPLY_RADIUS, Screen, Settings, Team,
 };
-use crate::operation::{DEPOTS, Map, cover_areas};
+use crate::operation::{DEPOTS, Map, Mode, cover_areas, influence, territory};
 use bevy::input::mouse::MouseWheel;
 use bevy::window::PrimaryWindow;
 use bevy::{picking::hover::Hovered, prelude::*, text::FontSize};
@@ -19,7 +19,13 @@ impl Plugin for WorldPlugin {
             .add_systems(OnExit(Screen::Battle), leave_map)
             .add_systems(
                 Update,
-                (camera_controls, pointer_controls, update_labels, draw_map)
+                (
+                    camera_controls,
+                    pointer_controls,
+                    sync_squad_labels,
+                    update_labels,
+                    draw_map,
+                )
                     .run_if(in_state(Screen::Battle)),
             );
     }
@@ -79,19 +85,6 @@ fn leave_map(mut commands: Commands, entities: Query<Entity, With<MapEntity>>) {
     }
 }
 fn create_labels(mut commands: Commands, battle: Res<Battle>) {
-    for (i, squad) in battle.squads.iter().enumerate() {
-        commands.spawn((
-            MapEntity,
-            SquadLabel(i),
-            Text2d::new(squad.callsign.clone()),
-            TextFont {
-                font_size: FontSize::Px(16.),
-                ..default()
-            },
-            TextColor(Color::srgb(0.87, 0.92, 0.82)),
-            Transform::from_xyz(squad.pos.x, squad.pos.y - 40., 5.),
-        ));
-    }
     for team in [Team::Blue, Team::Red] {
         let center = team.spawn();
         commands.spawn((
@@ -120,6 +113,21 @@ fn create_labels(mut commands: Commands, battle: Res<Battle>) {
             },
             TextColor(Color::srgb(0.85, 0.88, 0.74)),
             Transform::from_xyz(objective.pos.x, objective.pos.y + 102., 5.),
+        ));
+    }
+}
+fn sync_squad_labels(mut commands: Commands, battle: Res<Battle>, existing: Query<&SquadLabel>) {
+    for (i, squad) in battle.squads.iter().enumerate().skip(existing.iter().len()) {
+        commands.spawn((
+            MapEntity,
+            SquadLabel(i),
+            Text2d::new(squad.callsign.clone()),
+            TextFont {
+                font_size: FontSize::Px(16.),
+                ..default()
+            },
+            TextColor(Color::srgb(0.87, 0.92, 0.82)),
+            Transform::from_xyz(squad.pos.x, squad.pos.y - 40., 5.),
         ));
     }
 }
@@ -408,6 +416,27 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
         let cross = p + Vec2::new(0., 32.);
         gizmos.line_2d(cross - Vec2::X * 11., cross + Vec2::X * 11., team.color());
         gizmos.line_2d(cross - Vec2::Y * 11., cross + Vec2::Y * 11., team.color());
+    }
+    if battle.mode == Mode::Frontline {
+        let field: Vec<_> = influence(&battle.squads).collect();
+        let tile = 64.0;
+        for y in -10..=10 {
+            for x in -17..=17 {
+                let center = Vec2::new(x as f32, y as f32) * tile;
+                let (team, contested) = territory(center, &field);
+                let color = if contested {
+                    Color::srgba(0.95, 0.72, 0.35, 0.32)
+                } else if let Some(team) = team {
+                    team.color().with_alpha(0.28)
+                } else {
+                    continue;
+                };
+                for line in [-16.0, 0.0, 16.0] {
+                    let from = center + Vec2::new(-26., line - 5.);
+                    gizmos.line_2d(from, from + Vec2::new(52., 10.), color);
+                }
+            }
+        }
     }
     for (center, radius) in cover_areas(battle.map) {
         let color = Color::srgba(0.55, 0.78, 0.46, 0.42);

@@ -1,5 +1,7 @@
 use crate::model::{Battle, Difficulty, HudBlock, Kit, Pace, Roster, Screen, Settings, Team};
-use crate::operation::{CONTROL_TARGET, Finish, Mode, PERSONNEL_LIMIT, TIMED_LIMIT};
+use crate::operation::{
+    CONTROL_TARGET, Finish, Mode, PERSONNEL_LIMIT, RESERVE_COST, RESERVE_UNLOCK, TIMED_LIMIT,
+};
 use bevy::{
     ecs::system::SystemParam,
     picking::hover::Hovered,
@@ -34,6 +36,8 @@ enum Action {
     Pause,
     Hold,
     FireControl,
+    Reserve,
+    ReserveKit,
     Pace(Pace),
     Entrench,
     Smoke,
@@ -54,6 +58,7 @@ enum HudText {
     Equipment,
     Pace,
     CommandHint,
+    Reserve,
     Pause,
 }
 fn dynamic(p: &mut ChildSpawnerCommands, marker: HudText, size: f32, color: Color) {
@@ -148,6 +153,8 @@ fn button(parent: &mut ChildSpawnerCommands, label: impl Into<String>, action: A
                 dynamic(p, HudText::Squad(i), 11., INK);
             } else if let Action::Pause = action {
                 dynamic(p, HudText::Pause, 12., INK);
+            } else if let Action::Reserve = action {
+                dynamic(p, HudText::Reserve, 11., INK);
             } else {
                 text(p, label, 12., INK);
             }
@@ -342,6 +349,14 @@ fn roster_panel(commands: &mut Commands, r: Entity, roster: &Roster) {
                 13.,
                 BLUE,
             );
+            if roster.mode == Mode::Frontline {
+                button(
+                    p,
+                    format!("RESERVE: {} / 6 TROOPS", roster.reserve_kit.label()),
+                    Action::ReserveKit,
+                    200.,
+                );
+            }
             for (i, squad) in roster.squads.iter().enumerate() {
                 p.spawn((
                     Pickable::IGNORE,
@@ -457,6 +472,9 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
         },
         |p| {
             text(p, "SQUADS", 11., BLUE);
+            if battle.mode == Mode::Frontline {
+                button(p, "", Action::Reserve, 0.);
+            }
             for (i, _) in battle
                 .squads
                 .iter()
@@ -587,6 +605,7 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                     let seconds = battle.elapsed as u32;
                     let winner = battle.winner.map_or("", Team::label);
                     let reason = match battle.finish {
+                        Some(Finish::Resolve) => format!("{winner} broke the opposing frontline."),
                         Some(Finish::Score) => format!("{winner} reached the control target."),
                         Some(Finish::Time) if battle.draw => {
                             "Time expired with scores level.".into()
@@ -609,7 +628,7 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                         13.,
                         MUTED,
                     );
-                    if battle.mode != Mode::Conquest {
+                    if matches!(battle.mode, Mode::Control | Mode::Timed) {
                         text(
                             p,
                             format!(
@@ -701,6 +720,7 @@ fn actions(
                 *action,
                 Action::Hold
                     | Action::Pace(_)
+                    | Action::Reserve
                     | Action::FireControl
                     | Action::Entrench
                     | Action::Smoke
@@ -793,6 +813,18 @@ fn actions(
                 }
             }
             Action::Pace(pace) => battle.set_pace(pace),
+            Action::Reserve => {
+                crate::battle::call_reserve(&mut battle, Team::Blue);
+            }
+            Action::ReserveKit => {
+                roster.reserve_kit = match roster.reserve_kit {
+                    Kit::Rifle => Kit::Support,
+                    Kit::Support => Kit::Scout,
+                    Kit::Scout => Kit::Medic,
+                    Kit::Medic => Kit::Rifle,
+                };
+                redraw = true;
+            }
             Action::FireControl => crate::battle::toggle_fire_control(&mut battle),
             Action::Entrench => crate::battle::toggle_entrench(&mut battle),
             Action::Smoke => crate::battle::deploy_smoke(&mut battle),
@@ -832,13 +864,18 @@ fn refresh_battle(
     battle: Res<Battle>,
     mut commands: Commands,
     roots: Query<Entity, With<UiRoot>>,
-    mut previous: Local<(bool, bool, bool)>,
+    mut previous: Local<(bool, bool, bool, bool)>,
 ) {
     if *screen.get() != Screen::Battle {
-        *previous = (false, false, false);
+        *previous = (false, false, false, false);
         return;
     }
-    let status = (battle.paused, battle.winner.is_some(), battle.draw);
+    let status = (
+        battle.paused,
+        battle.winner.is_some(),
+        battle.draw,
+        battle.reserve_used[0],
+    );
     if *previous != status {
         *previous = status;
         for e in &roots {
@@ -851,6 +888,27 @@ fn refresh_battle(
 fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text, &mut TextColor)>) {
     for (marker, mut text, mut color) in &mut labels {
         let value = match *marker {
+            HudText::Reserve => {
+                let points = battle.requisition[0].floor();
+                if battle.reserve_used[0] {
+                    "RESERVE DEPLOYED".into()
+                } else if battle.elapsed < RESERVE_UNLOCK {
+                    format!(
+                        "RESERVE IN {:.0}s / {points:.0} RP",
+                        (RESERVE_UNLOCK - battle.elapsed).ceil()
+                    )
+                } else if points < RESERVE_COST {
+                    format!("RESERVE  {points:.0}/{RESERVE_COST:.0} RP")
+                } else {
+                    format!(
+                        "CALL {} / {RESERVE_COST:.0} RP",
+                        battle
+                            .reserve_kit
+                            .map_or("RESERVE", Kit::label)
+                            .to_uppercase()
+                    )
+                }
+            }
             HudText::CommandHint => {
                 let count = battle.selected.len();
                 if count == 0 {
@@ -889,6 +947,11 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text, &mut 
                         "{clock}  |  {:.0} - {:.0} / {CONTROL_TARGET:.0}",
                         battle.score[0].floor(),
                         battle.score[1].floor()
+                    ),
+                    Mode::Frontline => format!(
+                        "{clock} | RESOLVE {:.0} - {:.0}",
+                        battle.resolve[0].ceil(),
+                        battle.resolve[1].ceil()
                     ),
                     Mode::Timed => format!(
                         "{clock}  |  BLUE {:.0} - {:.0} RED",

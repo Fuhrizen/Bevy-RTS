@@ -132,6 +132,7 @@ pub struct SquadConfig {
 #[derive(Resource)]
 pub struct Roster {
     pub squads: [SquadConfig; 4],
+    pub reserve_kit: Kit,
     pub map: Map,
     pub mode: Mode,
 }
@@ -139,6 +140,7 @@ pub struct Roster {
 impl Default for Roster {
     fn default() -> Self {
         Self {
+            reserve_kit: Kit::Support,
             map: Map::default(),
             mode: Mode::default(),
             squads: [
@@ -331,6 +333,10 @@ pub struct Battle {
     pub map: Map,
     pub mode: Mode,
     pub score: [f32; 2],
+    pub resolve: [f32; 2],
+    pub requisition: [f32; 2],
+    pub reserve_used: [bool; 2],
+    pub reserve_kit: Option<Kit>,
     pub finish: Option<Finish>,
     pub volley_count: u64,
     pub order_count: u64,

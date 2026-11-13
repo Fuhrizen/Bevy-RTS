@@ -1,3 +1,4 @@
+use crate::operation::{RESERVE_COST, RESERVE_UNLOCK, RESOLVE, influence, territory};
 use crate::{
     model::*,
     operation::{CONTROL_TARGET, DEPOTS, Finish, Mode, TIMED_LIMIT, in_cover, leader},
@@ -104,6 +105,10 @@ fn new_battle(roster: &Roster) -> Battle {
         map: roster.map,
         mode: roster.mode,
         score: [0.0; 2],
+        resolve: [RESOLVE; 2],
+        requisition: [30.0; 2],
+        reserve_used: [false; 2],
+        reserve_kit: Some(roster.reserve_kit),
         finish: None,
         volley_count: 0,
         order_count: 0,
@@ -404,36 +409,91 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
     battle
         .selected
         .retain(|&i| battle.squads.get(i).is_some_and(Squad::alive));
-    let presence: Vec<_> = battle
-        .objectives
-        .iter()
-        .map(|objective| {
-            let blue = battle.squads.iter().any(|s| {
-                s.team == Team::Blue && s.alive() && s.pos.distance(objective.pos) <= CAPTURE_RADIUS
-            });
-            let red = battle.squads.iter().any(|s| {
-                s.team == Team::Red && s.alive() && s.pos.distance(objective.pos) <= CAPTURE_RADIUS
-            });
-            (blue, red)
-        })
-        .collect();
-    for (objective, (blue, red)) in battle.objectives.iter_mut().zip(presence) {
-        objective.contested = blue && red;
-        if blue != red {
-            objective.capture =
-                (objective.capture + if blue { dt / 10.0 } else { -dt / 10.0 }).clamp(-1.0, 1.0);
-        }
-        if objective.capture >= 1.0 {
-            objective.owner = Some(Team::Blue);
-        } else if objective.capture <= -1.0 {
-            objective.owner = Some(Team::Red);
-        } else if objective.owner == Some(Team::Blue) && objective.capture <= 0.0
-            || objective.owner == Some(Team::Red) && objective.capture >= 0.0
-        {
-            objective.owner = None;
+    if battle.mode == Mode::Frontline {
+        update_frontline(battle, dt);
+    } else {
+        let presence: Vec<_> = battle
+            .objectives
+            .iter()
+            .map(|objective| {
+                let blue = battle.squads.iter().any(|s| {
+                    s.team == Team::Blue
+                        && s.alive()
+                        && s.pos.distance(objective.pos) <= CAPTURE_RADIUS
+                });
+                let red = battle.squads.iter().any(|s| {
+                    s.team == Team::Red
+                        && s.alive()
+                        && s.pos.distance(objective.pos) <= CAPTURE_RADIUS
+                });
+                (blue, red)
+            })
+            .collect();
+        for (objective, (blue, red)) in battle.objectives.iter_mut().zip(presence) {
+            objective.contested = blue && red;
+            if blue != red {
+                objective.capture = (objective.capture + if blue { dt / 10.0 } else { -dt / 10.0 })
+                    .clamp(-1.0, 1.0);
+            }
+            if objective.capture >= 1.0 {
+                objective.owner = Some(Team::Blue);
+            } else if objective.capture <= -1.0 {
+                objective.owner = Some(Team::Red);
+            } else if objective.owner == Some(Team::Blue) && objective.capture <= 0.0
+                || objective.owner == Some(Team::Red) && objective.capture >= 0.0
+            {
+                objective.owner = None;
+            }
         }
     }
     resolve_operation(battle, dt, previous_elapsed);
+}
+
+pub fn call_reserve(battle: &mut Battle, team: Team) -> bool {
+    let side = usize::from(team == Team::Red);
+    if battle.mode != Mode::Frontline
+        || battle.elapsed < RESERVE_UNLOCK
+        || battle.requisition[side] < RESERVE_COST
+        || battle.reserve_used[side]
+        || battle.winner.is_some()
+        || battle.draw
+        || battle.paused
+    {
+        return false;
+    }
+    battle.requisition[side] -= RESERVE_COST;
+    battle.reserve_used[side] = true;
+    let kit = if team == Team::Blue {
+        battle.reserve_kit.unwrap_or(Kit::Support)
+    } else {
+        Kit::Support
+    };
+    battle.squads.push(make_squad(
+        team,
+        2,
+        format!("{} Reserve", team.label()),
+        kit,
+        6,
+    ));
+    true
+}
+
+fn update_frontline(battle: &mut Battle, dt: f32) {
+    let field: Vec<_> = influence(&battle.squads).collect();
+    for objective in &mut battle.objectives {
+        let (owner, contested) = territory(objective.pos, &field);
+        objective.owner = owner;
+        objective.contested = contested;
+        objective.capture = match owner {
+            Some(Team::Blue) => 1.0,
+            Some(Team::Red) => -1.0,
+            None => 0.0,
+        };
+    }
+    for points in &mut battle.requisition {
+        *points = (*points + dt).min(100.0);
+    }
+    call_reserve(battle, Team::Red);
 }
 
 fn resolve_operation(battle: &mut Battle, dt: f32, previous_elapsed: f32) {
@@ -455,13 +515,20 @@ fn resolve_operation(battle: &mut Battle, dt: f32, previous_elapsed: f32) {
     } else {
         dt
     };
-    if battle.mode != Mode::Conquest {
+    if matches!(battle.mode, Mode::Control | Mode::Timed) {
         for point in battle.objectives.iter().filter(|point| !point.contested) {
             match point.owner {
                 Some(Team::Blue) => battle.score[0] += scored_dt,
                 Some(Team::Red) => battle.score[1] += scored_dt,
                 None => {}
             }
+        }
+    }
+    if battle.mode == Mode::Frontline {
+        let majority = owned[0] as i32 - owned[1] as i32;
+        if majority != 0 {
+            let losing = usize::from(majority > 0);
+            battle.resolve[losing] = (battle.resolve[losing] - dt * majority.abs() as f32).max(0.0);
         }
     }
     let outcome = match battle.mode {
@@ -483,6 +550,9 @@ fn resolve_operation(battle: &mut Battle, dt: f32, previous_elapsed: f32) {
             Finish::Elimination,
             Some(if active[0] { Team::Blue } else { Team::Red }),
         )),
+        Mode::Frontline if battle.resolve.contains(&0.0) => {
+            Some((Finish::Resolve, leader(battle.resolve)))
+        }
         Mode::Control
             if battle.score.iter().any(|&score| score >= CONTROL_TARGET)
                 && leader(battle.score).is_some() =>
@@ -507,6 +577,60 @@ mod tests {
     use super::*;
 
     const DT: f32 = 1.0 / 64.0;
+
+    #[test]
+    fn frontline_flags_follow_influence_beyond_the_capture_ring() {
+        let mut battle = new_battle(&Roster {
+            mode: Mode::Frontline,
+            ..default()
+        });
+        let flag = battle.objectives[1].pos;
+        battle.squads[0].pos = flag - Vec2::X * 135.0;
+        battle.squads[4].pos = flag + Vec2::X * 135.0;
+        for soldier in &mut battle.squads[0].soldiers[6..] {
+            soldier.hp = 0.0;
+        }
+        update_frontline(&mut battle, DT);
+        assert!(battle.objectives[1].contested);
+        battle.squads[4].pos = Team::Red.spawn();
+        update_frontline(&mut battle, DT);
+        assert_eq!(battle.objectives[1].owner, Some(Team::Blue));
+        battle.squads[0].pos = Team::Blue.spawn();
+        update_frontline(&mut battle, DT);
+        assert_eq!(battle.objectives[1].owner, None);
+    }
+
+    #[test]
+    fn majority_wins_by_draining_the_other_teams_resolve() {
+        let mut battle = new_battle(&Roster {
+            mode: Mode::Frontline,
+            ..default()
+        });
+        battle.objectives[0].owner = Some(Team::Blue);
+        battle.resolve[1] = 0.5;
+        resolve_operation(&mut battle, 0.5, 0.0);
+        assert_eq!(battle.finish, Some(Finish::Resolve));
+        assert_eq!(battle.winner, Some(Team::Blue));
+    }
+
+    #[test]
+    fn reserve_unlock_requires_points_and_is_single_use() {
+        let mut battle = new_battle(&Roster {
+            mode: Mode::Frontline,
+            reserve_kit: Kit::Medic,
+            ..default()
+        });
+        assert!(!call_reserve(&mut battle, Team::Blue));
+        battle.elapsed = RESERVE_UNLOCK;
+        assert!(!call_reserve(&mut battle, Team::Blue));
+        battle.requisition[0] = 100.0;
+        assert!(call_reserve(&mut battle, Team::Blue));
+        assert_eq!(battle.squads[8].kit, Kit::Medic);
+        assert_eq!(battle.squads[8].pos.distance(Team::Blue.spawn()), 27.5);
+        assert_eq!(battle.requisition[0], 100.0 - RESERVE_COST);
+        battle.requisition[0] = 100.0;
+        assert!(!call_reserve(&mut battle, Team::Blue));
+    }
 
     #[test]
     fn control_scores_only_uncontested_owned_objectives() {

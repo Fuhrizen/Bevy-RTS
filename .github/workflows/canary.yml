@@ -1,0 +1,216 @@
+name: Canary release
+
+on:
+  workflow_run:
+    workflows: [Linting]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brevy-canary
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Identify latest validated main
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.detect.outputs.sha }}
+      previous: ${{ steps.detect.outputs.previous }}
+      rebuild: ${{ steps.detect.outputs.rebuild }}
+    steps:
+      - name: Checkout validated commit and tags
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Determine whether canary assets need rebuilding
+        id: detect
+        env:
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_main" != "$TARGET_SHA" ]]; then
+            echo "::error::Validated commit is no longer latest main; skipping stale canary."
+            exit 1
+          fi
+
+          previous=""
+          rebuild=true
+          if git rev-parse -q --verify "refs/tags/canary^{commit}" >/dev/null &&
+             gh release view canary >/dev/null 2>&1; then
+            previous="canary"
+            set +e
+            git diff --quiet canary "$TARGET_SHA" -- \
+              src/ crates/ tests/ assets/ Cargo.toml Cargo.lock \
+              rust-toolchain.toml build.rs .cargo/
+            diff_result=$?
+            set -e
+            case "$diff_result" in
+              0) rebuild=false ;;
+              1) rebuild=true ;;
+              *) echo "::error::Unable to compare canary snapshots"; exit "$diff_result" ;;
+            esac
+          fi
+
+          echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "rebuild=$rebuild" >> "$GITHUB_OUTPUT"
+          echo "Canary target: **$TARGET_SHA**; rebuild binaries: **$rebuild**" >> "$GITHUB_STEP_SUMMARY"
+
+  tests:
+    name: Test changed game logic
+    needs: prepare
+    uses: ./.github/workflows/release-tests.yml
+    with:
+      head_sha: ${{ needs.prepare.outputs.sha }}
+      base_ref: ${{ needs.prepare.outputs.previous }}
+    permissions:
+      contents: read
+
+  build:
+    name: Build canary ${{ matrix.platform }}
+    needs: [prepare, tests]
+    if: needs.prepare.outputs.rebuild == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            executable: brevy-rts
+          - platform: windows-x86_64
+            runner: windows-2022
+            executable: brevy-rts.exe
+    steps:
+      - name: Checkout validated main
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache release dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}-canary
+
+      - name: Install Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            g++ pkg-config libx11-dev libasound2-dev libudev-dev \
+            libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
+
+      - name: Compile canary
+        run: cargo build --release
+
+      - name: Package canary executable
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          EXECUTABLE: ${{ matrix.executable }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          archive="brevy-rts-canary-${PLATFORM}"
+          if [[ "$PLATFORM" == windows-* ]]; then
+            7z a "dist/${archive}.zip" "target/release/${EXECUTABLE}"
+          else
+            tar -czf "dist/${archive}.tar.gz" -C target/release "$EXECUTABLE"
+          fi
+
+      - name: Upload canary binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: canary-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Update rolling canary
+    needs: [prepare, tests, build]
+    if: >-
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.tests.result == 'success' &&
+      (needs.build.result == 'success' ||
+        (needs.build.result == 'skipped' && needs.prepare.outputs.rebuild == 'false'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout validated main
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Download rebuilt binaries
+        if: needs.prepare.outputs.rebuild == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: canary-*
+          merge-multiple: true
+          path: dist
+
+      - name: Advance canary tag and update one prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET_SHA: ${{ needs.prepare.outputs.sha }}
+          REBUILD: ${{ needs.prepare.outputs.rebuild }}
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_main" != "$TARGET_SHA" ]]; then
+            echo "::error::A newer main commit exists. Refusing to publish a stale canary."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f canary "$TARGET_SHA"
+          git push origin "+refs/tags/canary"
+
+          short_sha="${TARGET_SHA:0:8}"
+          notes="Rolling canary build from validated main commit ${TARGET_SHA}. The canary tag and assets are replaced as newer main commits pass Linting. Stable vX.Y.Z releases are retained."
+          if gh release view canary >/dev/null 2>&1; then
+            if [[ "$REBUILD" == "true" ]]; then
+              gh release upload canary dist/* --clobber
+            fi
+            gh release edit canary --title "Canary (${short_sha})" \
+              --notes "$notes" --prerelease --latest=false --target "$TARGET_SHA"
+          else
+            if [[ "$REBUILD" != "true" ]]; then
+              echo "::error::Canary has no release assets; a rebuild is required."
+              exit 1
+            fi
+            gh release create canary dist/* \
+              --title "Canary (${short_sha})" \
+              --notes "$notes" \
+              --prerelease --latest=false --target "$TARGET_SHA" --verify-tag
+          fi
+          echo "Updated single [canary prerelease](https://github.com/${GITHUB_REPOSITORY}/releases/tag/canary) to ${TARGET_SHA}" >> "$GITHUB_STEP_SUMMARY"

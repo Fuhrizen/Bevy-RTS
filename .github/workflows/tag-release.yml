@@ -1,0 +1,103 @@
+name: Tag release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Semantic version increment (custom uses version below)'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+        required: true
+        default: patch
+      version:
+        description: 'Required for custom: X.Y.Z or vX.Y.Z'
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: semantic-release
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Verify code before tagging
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  tag:
+    name: Determine and push tag
+    needs: checks
+    runs-on: ubuntu-24.04
+    outputs:
+      release_tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout main and tags
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Calculate next version
+        id: version
+        shell: bash
+        env:
+          BUMP: ${{ inputs.bump }}
+          CUSTOM_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          latest="$(git tag -l 'v*' | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | sort -V | tail -n 1 || true)"
+          latest="${latest:-v0.0.0}"
+          IFS=. read -r major minor patch <<< "${latest#v}"
+          case "$BUMP" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+            custom)
+              custom="${CUSTOM_VERSION#v}"
+              if [[ ! "$custom" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                echo "::error::Specify custom version in X.Y.Z format"
+                exit 1
+              fi
+              IFS=. read -r major minor patch <<< "$custom"
+              ;;
+            *) echo "::error::Unknown bump option"; exit 1 ;;
+          esac
+          tag="v$major.$minor.$patch"
+          if [[ "$(printf '%s\n%s\n' "$latest" "$tag" | sort -V | tail -n1)" != "$tag" || "$tag" == "$latest" ]]; then
+            echo "::error::Version $tag must be greater than latest $latest"
+            exit 1
+          fi
+          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::Tag $tag already exists"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Preparing release $tag (previous: $latest)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Push annotated release tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+          git push origin "refs/tags/$RELEASE_TAG"
+
+  release:
+    name: Build binaries and publish release
+    needs: tag
+    uses: ./.github/workflows/release.yml
+    with:
+      release_tag: ${{ needs.tag.outputs.release_tag }}
+    permissions:
+      contents: write

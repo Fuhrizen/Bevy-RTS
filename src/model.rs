@@ -204,6 +204,13 @@ pub struct Objective {
     pub contested: bool,
 }
 
+pub struct VolleyEffect {
+    pub from: Vec2,
+    pub to: Vec2,
+    pub team: Team,
+    pub ttl: f32,
+}
+
 #[derive(Default, Resource)]
 pub struct Battle {
     pub squads: Vec<Squad>,
@@ -211,6 +218,9 @@ pub struct Battle {
     pub winner: Option<Team>,
     pub draw: bool,
     pub elapsed: f32,
+    pub effects: Vec<VolleyEffect>,
+    pub volley_count: u64,
+    pub order_count: u64,
     pub paused: bool,
     pub selected: BTreeSet<usize>,
 }

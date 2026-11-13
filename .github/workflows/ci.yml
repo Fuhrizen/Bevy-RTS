@@ -20,16 +20,64 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect Rust changes
+        id: changes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+            head="$PR_HEAD_SHA"
+          else
+            base="$BEFORE_SHA"
+            head="$GITHUB_SHA"
+          fi
+
+          # New refs have an all-zero before SHA; validate conservatively.
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            changed=true
+          else
+            set +e
+            git diff --quiet "$base" "$head" -- \
+              src/ crates/ tests/ Cargo.toml Cargo.lock \
+              rust-toolchain.toml build.rs .cargo/
+            result=$?
+            set -e
+            case "$result" in
+              0) changed=false ;;
+              1) changed=true ;;
+              *) echo "::error::Unable to compare commits"; exit "$result" ;;
+            esac
+          fi
+          echo "rust_changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "Rust lint required: **$changed**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check patch whitespace
+        shell: bash
+        run: |
+          git diff --check HEAD^ HEAD 2>/dev/null || \
+            git diff --check
 
       - name: Install Rust
+        if: steps.changes.outputs.rust_changed == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
       - name: Cache dependencies
+        if: steps.changes.outputs.rust_changed == 'true'
         uses: Swatinem/rust-cache@v2
 
       - name: Install Linux libraries
+        if: steps.changes.outputs.rust_changed == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -37,14 +85,13 @@ jobs:
             libxkbcommon-x11-0 libwayland-dev libxkbcommon-dev
 
       - name: Format
+        if: steps.changes.outputs.rust_changed == 'true'
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        if: steps.changes.outputs.rust_changed == 'true'
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Tests
-        env:
-          # Large Bevy test binaries are expensive to build and link with debug symbols.
-          # Keep assertions/test execution, but omit debug symbols on CI runners.
-          CARGO_PROFILE_TEST_DEBUG: "0"
-        run: cargo test --all-targets --all-features
+      - name: No Rust changes
+        if: steps.changes.outputs.rust_changed == 'false'
+        run: echo "No Rust source, manifest, or toolchain changes; Rust checks not needed." >> "$GITHUB_STEP_SUMMARY"

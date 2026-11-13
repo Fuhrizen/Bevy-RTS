@@ -21,21 +21,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  lint:
-    name: Linting
-    if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
-
   version:
-    name: Calculate version
-    needs: lint
+    name: Verify CI and calculate version
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
     outputs:
       tag: ${{ steps.compute.outputs.tag }}
     steps:
+      - name: Verify successful main Linting run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Releases must be dispatched from main."
+            exit 1
+          fi
+          current_main="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_main" != "$GITHUB_SHA" ]]; then
+            echo "::error::Main changed after this workflow was dispatched. Start a fresh release."
+            exit 1
+          fi
+          successes="$(gh api             "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&event=push&per_page=30"             --jq '[.workflow_runs[] | select(.head_branch == "main" and .conclusion == "success")] | length')"
+          if [[ "$successes" -eq 0 ]]; then
+            echo "::error::No successful main Linting run found for $GITHUB_SHA. Wait for CI to pass, then dispatch again."
+            exit 1
+          fi
+          echo "Using previously successful Linting for ${GITHUB_SHA}" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout validated commit and tags
         uses: actions/checkout@v7
         with:

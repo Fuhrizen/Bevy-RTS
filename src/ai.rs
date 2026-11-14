@@ -1,14 +1,19 @@
 //! Opponent state transitions for the sector-control game mode.
 use bevy::prelude::*;
 
-use crate::model::*;
+use crate::{model::*, operation::Mode};
 
 pub fn direct_red(mut battle: ResMut<Battle>) {
     direct_squads(&mut battle);
 }
 
 pub fn direct_squads(battle: &mut Battle) {
-    if battle.paused || battle.winner.is_some() || battle.draw || battle.objectives.is_empty() {
+    if battle.pace == Pace::Planning
+        || battle.paused
+        || battle.winner.is_some()
+        || battle.draw
+        || battle.objectives.is_empty()
+    {
         return;
     }
 
@@ -16,7 +21,10 @@ pub fn direct_squads(battle: &mut Battle) {
         .squads
         .iter()
         .enumerate()
-        .filter(|(_, squad)| squad.team == Team::Blue && squad.alive())
+        .filter(|(_, squad)| {
+            squad.team == Team::Blue
+                && crate::contact::spotted(battle.map, &battle.squads, Team::Red, squad)
+        })
         .map(|(i, squad)| (i, squad.pos))
         .collect();
     let mut claims = vec![0; battle.objectives.len()];
@@ -40,12 +48,17 @@ pub fn direct_squads(battle: &mut Battle) {
         if let Some(point) = assigned {
             claims[point] -= 1;
         }
-        squad.ai = choose_state(squad, &battle.objectives, &claims, &enemies);
+        squad.ai = choose_state(squad, &battle.objectives, &claims, &enemies, battle.mode);
         squad.focus = None;
         squad.entrenched = false;
         match squad.ai {
             AiState::Resupply | AiState::Recover => {
-                route_to(squad, Team::Red.spawn());
+                let point = if squad.ai == AiState::Recover {
+                    Team::Red.spawn()
+                } else {
+                    crate::battle::supply_destination(&battle.objectives, Team::Red, squad.pos)
+                };
+                route_to(squad, point);
             }
             AiState::Engage(enemy) => {
                 squad.focus = Some(enemy);
@@ -73,6 +86,7 @@ fn choose_state(
     objectives: &[Objective],
     claims: &[u32],
     enemies: &[(usize, Vec2)],
+    mode: Mode,
 ) -> AiState {
     if squad.supplies < 14.0 || squad.ai == AiState::Resupply && squad.supplies < 90.0 {
         return AiState::Resupply;
@@ -101,14 +115,18 @@ fn choose_state(
 
     let target = match squad.ai {
         AiState::Advance(point) | AiState::Hold(point)
-            if objectives[point].owner != Some(Team::Red) || objectives[point].contested =>
+            if mode == Mode::Frontline
+                || objectives[point].owner != Some(Team::Red)
+                || objectives[point].contested =>
         {
             Some(point)
         }
         _ => objectives
             .iter()
             .enumerate()
-            .filter(|(_, point)| point.owner != Some(Team::Red) || point.contested)
+            .filter(|(_, point)| {
+                mode == Mode::Frontline || point.owner != Some(Team::Red) || point.contested
+            })
             .map(|(i, point)| {
                 let score = squad.pos.distance(point.pos) + 520.0 * claims[i] as f32
                     - if point.contested { 190.0 } else { 0.0 };

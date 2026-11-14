@@ -1,4 +1,5 @@
 //! Shared game state for simulation, rendering, and the player interface.
+use crate::operation::{Finish, Map, Mode, PERSONNEL_LIMIT};
 use std::collections::{BTreeSet, VecDeque};
 
 use bevy::prelude::*;
@@ -131,11 +132,17 @@ pub struct SquadConfig {
 #[derive(Resource)]
 pub struct Roster {
     pub squads: [SquadConfig; 4],
+    pub reserve_kit: Kit,
+    pub map: Map,
+    pub mode: Mode,
 }
 
 impl Default for Roster {
     fn default() -> Self {
         Self {
+            reserve_kit: Kit::Support,
+            map: Map::default(),
+            mode: Mode::default(),
             squads: [
                 ("Alpha", Kit::Rifle),
                 ("Bravo", Kit::Support),
@@ -148,6 +155,22 @@ impl Default for Roster {
                 manpower: 8,
             }),
         }
+    }
+}
+
+impl Roster {
+    pub fn personnel(&self) -> u8 {
+        self.squads.iter().map(|squad| squad.manpower).sum()
+    }
+
+    pub fn cycle_manpower(&mut self, index: usize) {
+        let current = self.squads[index].manpower;
+        let next = if current >= 10 { 4 } else { current + 2 };
+        self.squads[index].manpower = if self.personnel() - current + next <= PERSONNEL_LIMIT {
+            next
+        } else {
+            4
+        };
     }
 }
 
@@ -178,6 +201,11 @@ pub struct Squad {
     pub supplies: f32,
     pub orders: VecDeque<Vec2>,
     pub entrenched: bool,
+    pub hold_fire: bool,
+    pub cautious_move: bool,
+    pub suppression: f32,
+    pub visible_to_blue: bool,
+    pub last_contact: Option<(Vec2, f32)>,
     pub smoke: f32,
     pub focus: Option<usize>,
     pub ai: AiState,
@@ -189,6 +217,44 @@ impl Squad {
             .iter()
             .filter(|soldier| soldier.hp > 0.0)
             .count()
+    }
+
+    pub fn engaged(&self) -> bool {
+        self.soldiers
+            .iter()
+            .any(|soldier| soldier.hp > 0.0 && soldier.cooldown > 0.0)
+    }
+
+    pub fn marker_status(&self) -> (&'static str, Color) {
+        const WARNING: Color = Color::srgb(1.0, 0.69, 0.30);
+        if self.supplies < 1.0 {
+            ("EMPTY", WARNING)
+        } else if self.supplies <= 20.0 {
+            ("LOW SUPPLY", WARNING)
+        } else if self.manpower() * 2 <= self.soldiers.len() {
+            ("LOW STRENGTH", WARNING)
+        } else if self.suppression >= crate::contact::PIN_THRESHOLD {
+            ("PINNED", WARNING)
+        } else if self.smoke > 0.0 {
+            ("SMOKE", Color::srgb(0.82, 0.88, 0.90))
+        } else if self.hold_fire {
+            ("HOLD FIRE", Color::srgb(0.75, 0.69, 1.0))
+        } else if self.engaged() {
+            ("ENGAGED", Color::srgb(1.0, 0.52, 0.30))
+        } else if !self.orders.is_empty() {
+            (
+                if self.cautious_move {
+                    "ADVANCING"
+                } else {
+                    "MOVING"
+                },
+                Color::srgb(0.48, 0.86, 0.97),
+            )
+        } else if self.entrenched {
+            ("DUG IN", Color::srgb(0.63, 0.88, 0.57))
+        } else {
+            ("READY", self.team.color())
+        }
     }
 
     pub fn alive(&self) -> bool {
@@ -243,6 +309,32 @@ pub struct VolleyEffect {
     pub ttl: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pace {
+    Planning,
+    #[default]
+    Deliberate,
+    Normal,
+}
+
+impl Pace {
+    pub fn factor(self) -> f32 {
+        match self {
+            Self::Planning => 0.0,
+            Self::Deliberate => 0.65,
+            Self::Normal => 1.0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Planning => "PLAN",
+            Self::Deliberate => "0.65x",
+            Self::Normal => "1x",
+        }
+    }
+}
+
 #[derive(Default, Resource)]
 pub struct Battle {
     pub squads: Vec<Squad>,
@@ -251,9 +343,19 @@ pub struct Battle {
     pub draw: bool,
     pub elapsed: f32,
     pub effects: Vec<VolleyEffect>,
+    pub map: Map,
+    pub mode: Mode,
+    pub score: [f32; 2],
+    pub resolve: [f32; 2],
+    pub requisition: [f32; 2],
+    pub reserve_used: [bool; 2],
+    pub reserve_kit: Option<Kit>,
+    pub finish: Option<Finish>,
     pub volley_count: u64,
     pub order_count: u64,
     pub paused: bool,
+    pub pace: Pace,
+    pub resume_pace: Pace,
     pub selected: BTreeSet<usize>,
 }
 
@@ -267,6 +369,13 @@ pub struct TeamReport {
 }
 
 impl Battle {
+    pub fn set_pace(&mut self, pace: Pace) {
+        if pace != Pace::Planning {
+            self.resume_pace = pace;
+        }
+        self.pace = pace;
+    }
+
     pub fn report(&self, team: Team) -> TeamReport {
         let mut report = TeamReport {
             objectives: self

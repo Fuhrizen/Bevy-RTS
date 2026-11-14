@@ -5,10 +5,12 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 
+use crate::operation::Map;
+
 const WIDTH: u32 = 1120;
 const HEIGHT: u32 = 720;
 
-pub fn relief_image() -> Image {
+pub fn relief_image(map: Map) -> Image {
     let mut pixels = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
@@ -16,20 +18,28 @@ pub fn relief_image() -> Image {
                 (x as f32 / WIDTH as f32 - 0.5) * 2.0,
                 (0.5 - y as f32 / HEIGHT as f32) * 2.0,
             );
-            let z = elevation(p);
-            let slope = (z - elevation(p + Vec2::new(-0.009, 0.012))) * 5.0;
+            let sample = match map {
+                Map::Riverbend => p,
+                Map::Highmoor => Vec2::new(p.y + 0.19, p.x * 1.1),
+                Map::Crossroads => p * 0.67 + Vec2::new(-0.15, 0.13),
+            };
+            let z = elevation(sample);
+            let slope = (z - elevation(sample + Vec2::new(-0.009, 0.012))) * 5.0;
             let river_center = 0.22 * (p.y * 3.2).sin() + p.y * 0.23;
             let bank = (p.x - river_center).abs();
             let grain =
                 ((x.wrapping_mul(1_664_525) ^ y.wrapping_mul(1_013_904_223)) % 31) as f32 / 1000.0;
-            let ground = Vec3::new(0.18, 0.23, 0.18)
-                + Vec3::new(0.16, 0.14, 0.10) * z
-                + Vec3::splat(slope + grain);
+            let palette = match map {
+                Map::Riverbend => Vec3::new(0.18, 0.23, 0.18),
+                Map::Highmoor => Vec3::new(0.23, 0.23, 0.19),
+                Map::Crossroads => Vec3::new(0.18, 0.24, 0.23),
+            };
+            let ground = palette + Vec3::new(0.16, 0.14, 0.10) * z + Vec3::splat(slope + grain);
             let contour = 1.0 - ((z * 18.0).fract() - 0.5).abs() * 2.0;
             let shaded = ground - Vec3::splat(0.047 * contour.powi(9));
-            let rgb = if bank < 0.021 {
+            let rgb = if map == Map::Riverbend && bank < 0.021 {
                 Vec3::new(0.11, 0.22, 0.23) + Vec3::splat(grain)
-            } else if bank < 0.028 {
+            } else if map == Map::Riverbend && bank < 0.028 {
                 shaded.lerp(Vec3::new(0.35, 0.37, 0.27), 0.28)
             } else {
                 shaded

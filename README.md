@@ -90,3 +90,68 @@ A successful, push-triggered **Linting** run on `main` automatically updates the
 To retain a particular canary build, archive its downloaded files separately before the next update. The `canary` tag is deliberately moved forward and must not be used as an immutable dependency.
 
 Only the manual **Tag release** workflow produces stable releases. Pushing a tag alone does not launch a release.
+
+## Skirmish operations
+
+Choose a map and mode on the loadout screen. The four Blue squads share a
+32-soldier budget, so increasing one squad may require thinning another.
+
+- **Riverbend** uses the original river valley and wide sectors.
+- **Highmoor** offsets the approach routes and uses a different relief map.
+- **Crossroads** clusters objectives closer to the centre.
+
+**Conquest** requires all six sectors. **Control** awards one point per second
+per uncontested sector and ends when a side reaches 480 with the lead.
+**Timed** uses the same scoring and finishes after three minutes. In Control
+and Timed, eliminating the other force also wins. An even score at the Timed
+deadline results in a draw.
+
+Green rings mark cover, which reduces incoming damage by 25%. The north and
+south depots replenish supply while friendly and uncontested. Resupply directs
+selected squads to the nearest available depot or home base. Home bases also
+restore health. Toggle Hold Fire applies one fire policy to all selected squads.
+
+Matches start at 0.65x simulation speed. Use the pace controls to switch to 1x
+or enter planning pause. Space toggles planning pause and restores your last
+running speed. You can still move the camera, select squads, and issue orders
+in planning pause. The squad marker and selected-squad panel show the current
+condition. Selected attack orders draw a line and a ring around their target.
+
+### Frontline mode
+
+Select **Frontline** in the loadout and choose a reserve kit. Squads project
+territory based on strength and distance. Sectors change hands when influence
+reaches the flag. Blue and Red hatching show territorial influence, and amber
+shows a contested boundary. A sector majority drains the opposing team's
+resolve. The match ends when one team runs out of resolve or is eliminated.
+
+Both sides start with 30 requisition points and gain one per simulation second.
+One six-person reserve squad can deploy at home from 45 seconds onward for
+60 points. Blue uses the chosen reserve kit, and Red receives Support.
+
+### Reconnaissance and contact
+
+Scouts reveal contacts farther than other squads. Quiet squads in cover are
+harder to detect. Hatch-marked terrain and active smoke block sight. An enemy
+must be visible to a friendly squad to appear on the battlefield, and firing
+requires the attacking squad's own clear sight. Lost contacts leave a marker at
+their last observed location for 15 simulation seconds. The Frontline overlay displays
+known influence. Objective ownership still uses the full simulation.
+
+Hold **Q** while right-clicking the ground to advance cautiously. The squad
+halts when it sees a target within engagement range and resumes when the
+contact clears. Regular move, hold, and resupply orders override the stance.
+Incoming fire builds suppression. The orange bar below a squad shows pressure,
+which slows movement and reduces fire effectiveness until it dissipates.
+
+## Full-game milestones
+
+1. **Skirmish fundamentals.** Validate scouting, occlusion, suppression, and
+   command response in repeatable engagements. Add terrain-aware pathing and
+   formation movement.
+2. **Battlegroup building.** Add configurable reserve rosters, availability
+   limits, phases, and distinct unit families with observable trade-offs.
+3. **Operations.** Add authored scenarios with briefings, varied starts and
+   objectives, and progression between battles.
+4. **Release validation.** Playtest pacing, AI decisions, map readability,
+   and deployment balance. Measure frame time and complete platform smoke tests.

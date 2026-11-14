@@ -148,13 +148,26 @@ fn update_labels(
         if let Some(squad) = battle.squads.get(label.0) {
             let (activity, color) = squad.marker_status();
             tint.set_if_neq(TextColor(color));
-            let label_text = format!("{}  /  {}", squad.callsign, activity);
+            let (position, label_text, show) = if squad.alive() && squad.visible_to_blue {
+                (
+                    squad.pos,
+                    format!("{}  /  {}", squad.callsign, activity),
+                    true,
+                )
+            } else if !squad.visible_to_blue
+                && let Some((position, _)) = squad.last_contact
+            {
+                tint.set_if_neq(TextColor(Color::srgb(0.67, 0.66, 0.63)));
+                (position, "LAST CONTACT".to_owned(), true)
+            } else {
+                (squad.pos, String::new(), false)
+            };
             if text.0 != label_text {
                 text.0 = label_text;
             }
-            transform.translation.x = squad.pos.x;
-            transform.translation.y = squad.pos.y - 40.;
-            *visibility = if squad.alive() {
+            transform.translation.x = position.x;
+            transform.translation.y = position.y - 40.;
+            *visibility = if show {
                 Visibility::Visible
             } else {
                 Visibility::Hidden
@@ -349,7 +362,9 @@ fn pointer_controls(
             .squads
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.team == Team::Red && s.alive() && s.pos.distance(world) < 42.)
+            .filter(|(_, s)| {
+                s.team == Team::Red && s.alive() && s.visible_to_blue && s.pos.distance(world) < 42.
+            })
             .min_by(|(_, a), (_, b)| {
                 a.pos
                     .distance_squared(world)
@@ -370,6 +385,7 @@ fn pointer_controls(
                         squad.orders.clear();
                     }
                     squad.focus = Some(target);
+                    squad.cautious_move = false;
                     squad.hold_fire = false;
                     squad.entrenched = false;
                     let direction = (squad.pos - enemy).normalize_or_zero();
@@ -382,6 +398,16 @@ fn pointer_controls(
             }
         } else {
             crate::battle::issue_move(&mut battle, world, shift);
+            if keys.pressed(KeyCode::KeyQ) && !shift {
+                let Battle {
+                    selected, squads, ..
+                } = &mut *battle;
+                for &i in selected.iter() {
+                    if let Some(squad) = squads.get_mut(i) {
+                        squad.cautious_move = true;
+                    }
+                }
+            }
         }
     }
 }
@@ -418,7 +444,8 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
         gizmos.line_2d(cross - Vec2::Y * 11., cross + Vec2::Y * 11., team.color());
     }
     if battle.mode == Mode::Frontline {
-        let field: Vec<_> = influence(&battle.squads).collect();
+        let field: Vec<_> =
+            influence(battle.squads.iter().filter(|squad| squad.visible_to_blue)).collect();
         let tile = 64.0;
         for y in -10..=10 {
             for x in -17..=17 {
@@ -436,6 +463,17 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
                     gizmos.line_2d(from, from + Vec2::new(52., 10.), color);
                 }
             }
+        }
+    }
+    for (center, radius) in crate::contact::sight_blockers(battle.map) {
+        let color = Color::srgba(0.73, 0.79, 0.77, 0.62);
+        gizmos.circle_2d(center, radius, color);
+        for y in [-30.0, -15.0, 0.0, 15.0, 30.0] {
+            gizmos.line_2d(
+                center + Vec2::new(-28., y - 11.),
+                center + Vec2::new(28., y + 11.),
+                color,
+            );
         }
     }
     for (center, radius) in cover_areas(battle.map) {
@@ -508,7 +546,12 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
         );
     }
     for (i, squad) in battle.squads.iter().enumerate() {
-        if !squad.alive() {
+        if !squad.alive() || !squad.visible_to_blue {
+            if !squad.visible_to_blue
+                && let Some((position, _)) = squad.last_contact
+            {
+                gizmos.circle_2d(position, 24.0, Color::srgba(0.67, 0.66, 0.63, 0.65));
+            }
             continue;
         }
         let p = squad.pos;
@@ -585,6 +628,13 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
                 Color::srgb(0.84, 0.72, 0.42)
             },
         );
+        if squad.suppression > 0.02 {
+            gizmos.line_2d(
+                p + Vec2::new(-23., -32.),
+                p + Vec2::new(-23. + 46. * squad.suppression, -32.),
+                Color::srgb(1.0, 0.50, 0.24),
+            );
+        }
         let (_, status_color) = squad.marker_status();
         let badge = p + Vec2::new(33., 12.);
         let offsets = [Vec2::Y, Vec2::X, Vec2::NEG_Y, Vec2::NEG_X, Vec2::Y];
@@ -599,7 +649,7 @@ fn draw_map(mut gizmos: Gizmos, battle: Res<Battle>, pointer: Res<PointerState>)
             && let Some(enemy) = squad
                 .focus
                 .and_then(|j| battle.squads.get(j))
-                .filter(|s| s.alive())
+                .filter(|s| s.alive() && s.visible_to_blue)
         {
             let focus = Color::srgba(1., 0.44, 0.30, 0.72);
             gizmos.line_2d(p, enemy.pos, focus);

@@ -202,6 +202,10 @@ pub struct Squad {
     pub orders: VecDeque<Vec2>,
     pub entrenched: bool,
     pub hold_fire: bool,
+    pub cautious_move: bool,
+    pub suppression: f32,
+    pub visible_to_blue: bool,
+    pub last_contact: Option<(Vec2, f32)>,
     pub smoke: f32,
     pub focus: Option<usize>,
     pub ai: AiState,
@@ -229,6 +233,8 @@ impl Squad {
             ("LOW SUPPLY", WARNING)
         } else if self.manpower() * 2 <= self.soldiers.len() {
             ("LOW STRENGTH", WARNING)
+        } else if self.suppression >= crate::contact::PIN_THRESHOLD {
+            ("PINNED", WARNING)
         } else if self.smoke > 0.0 {
             ("SMOKE", Color::srgb(0.82, 0.88, 0.90))
         } else if self.hold_fire {
@@ -236,7 +242,14 @@ impl Squad {
         } else if self.engaged() {
             ("ENGAGED", Color::srgb(1.0, 0.52, 0.30))
         } else if !self.orders.is_empty() {
-            ("MOVING", Color::srgb(0.48, 0.86, 0.97))
+            (
+                if self.cautious_move {
+                    "ADVANCING"
+                } else {
+                    "MOVING"
+                },
+                Color::srgb(0.48, 0.86, 0.97),
+            )
         } else if self.entrenched {
             ("DUG IN", Color::srgb(0.63, 0.88, 0.57))
         } else {

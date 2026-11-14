@@ -149,8 +149,10 @@ pub struct Influence {
     pub team: Team,
     pub weight: f32,
 }
-pub fn influence(squads: &[crate::model::Squad]) -> impl Iterator<Item = Influence> + '_ {
-    squads.iter().filter_map(|squad| {
+pub fn influence<'a>(
+    squads: impl Iterator<Item = &'a crate::model::Squad>,
+) -> impl Iterator<Item = Influence> {
+    squads.filter_map(|squad| {
         let strength = squad.manpower();
         (strength > 0).then_some(Influence {
             pos: squad.pos,

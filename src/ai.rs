@@ -21,7 +21,10 @@ pub fn direct_squads(battle: &mut Battle) {
         .squads
         .iter()
         .enumerate()
-        .filter(|(_, squad)| squad.team == Team::Blue && squad.alive())
+        .filter(|(_, squad)| {
+            squad.team == Team::Blue
+                && crate::contact::spotted(battle.map, &battle.squads, Team::Red, squad)
+        })
         .map(|(i, squad)| (i, squad.pos))
         .collect();
     let mut claims = vec![0; battle.objectives.len()];

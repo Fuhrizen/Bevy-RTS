@@ -47,6 +47,10 @@ fn make_squad(team: Team, index: usize, callsign: String, kit: Kit, manpower: u8
         orders: VecDeque::new(),
         entrenched: false,
         hold_fire: false,
+        cautious_move: false,
+        suppression: 0.0,
+        visible_to_blue: team == Team::Blue,
+        last_contact: None,
         smoke: 0.0,
         focus: None,
         ai: AiState::Idle,
@@ -138,6 +142,7 @@ pub fn issue_move(battle: &mut Battle, destination: Vec2, append: bool) {
     for (slot, i) in living.into_iter().enumerate() {
         let squad = &mut battle.squads[i];
         if !append {
+            squad.cautious_move = false;
             squad.orders.clear();
         }
         let offset = if group {
@@ -206,6 +211,7 @@ pub fn resupply_selected(battle: &mut Battle) {
             && squad.alive()
         {
             let destination = supply_destination(&battle.objectives, squad.team, squad.pos);
+            squad.cautious_move = false;
             squad.orders.clear();
             squad.focus = None;
             if squad.pos.distance(destination) > SUPPLY_RADIUS {
@@ -248,7 +254,22 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
         effect.ttl -= dt;
         effect.ttl > 0.0
     });
-    for squad in &mut battle.squads {
+    let halts: Vec<bool> = battle
+        .squads
+        .iter()
+        .map(|squad| {
+            squad.cautious_move
+                && !squad.hold_fire
+                && squad.supplies >= 0.45
+                && battle.squads.iter().any(|target| {
+                    target.team != squad.team
+                        && target.pos.distance(squad.pos) <= 220.0
+                        && crate::contact::can_see(battle.map, squad, target, &battle.squads)
+                })
+        })
+        .collect();
+    for (squad, halt) in battle.squads.iter_mut().zip(halts) {
+        squad.suppression = (squad.suppression - 0.13 * dt).max(0.0);
         squad.smoke = (squad.smoke - dt).max(0.0);
         for soldier in &mut squad.soldiers {
             soldier.cooldown = (soldier.cooldown - dt).max(0.0);
@@ -257,13 +278,14 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
             squad.orders.clear();
             continue;
         }
-        if let Some(&destination) = squad.orders.front() {
+        if !halt && let Some(&destination) = squad.orders.front() {
             let delta = destination - squad.pos;
             let speed = if matches!(squad.kit, Kit::Scout) {
                 100.0
             } else {
                 80.0
             };
+            let speed = speed * (1.0 - 0.60 * squad.suppression);
             if delta.length() <= speed * dt {
                 squad.pos = destination;
                 squad.orders.pop_front();
@@ -282,11 +304,32 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
             }
         }
     }
+    let contacts: Vec<_> = battle
+        .squads
+        .iter()
+        .map(|squad| {
+            squad.team == Team::Blue
+                || crate::contact::spotted(battle.map, &battle.squads, Team::Blue, squad)
+        })
+        .collect();
+    for (squad, visible) in battle.squads.iter_mut().zip(contacts) {
+        squad.visible_to_blue = visible;
+        if squad.team == Team::Red {
+            if visible {
+                squad.last_contact = Some((squad.pos, battle.elapsed));
+            } else if squad
+                .last_contact
+                .is_some_and(|(_, time)| battle.elapsed - time > 15.0)
+            {
+                squad.last_contact = None;
+            }
+        }
+    }
     // Resolve fire from a snapshot so both sides get a turn in the same frame.
     let mut volleys = Vec::new();
     for i in 0..battle.squads.len() {
         let attacker = &battle.squads[i];
-        if !attacker.alive() || attacker.hold_fire || attacker.supplies < 1.0 {
+        if !attacker.alive() || attacker.hold_fire || attacker.supplies < 0.45 {
             continue;
         }
         let range = if matches!(attacker.kit, Kit::Scout) {
@@ -298,7 +341,9 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
             .focus
             .filter(|&j| {
                 battle.squads.get(j).is_some_and(|s| {
-                    s.team != attacker.team && s.alive() && s.pos.distance(attacker.pos) <= range
+                    s.team != attacker.team
+                        && s.pos.distance(attacker.pos) <= range
+                        && crate::contact::can_see(battle.map, attacker, s, &battle.squads)
                 })
             })
             .or_else(|| {
@@ -308,8 +353,8 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
                     .enumerate()
                     .filter(|(_, s)| {
                         s.team != attacker.team
-                            && s.alive()
                             && s.pos.distance(attacker.pos) <= range
+                            && crate::contact::can_see(battle.map, attacker, s, &battle.squads)
                     })
                     .min_by(|(_, a), (_, b)| {
                         a.pos
@@ -339,7 +384,8 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
                 .soldiers
                 .iter()
                 .filter(|s| s.hp > 0.0 && s.cooldown <= 0.0)
-                .count();
+                .count()
+                .min((attacker.supplies / 0.45).floor() as usize);
             let difficulty = if attacker.team == Team::Red {
                 match difficulty {
                     Difficulty::Recruit => 0.7,
@@ -350,30 +396,41 @@ fn step_battle(battle: &mut Battle, difficulty: Difficulty, dt: f32) {
                 1.0
             };
             if ready > 0 {
-                volleys.push((i, j, ready as f32 * 7.0 * defense * difficulty));
+                volleys.push((
+                    i,
+                    j,
+                    ready,
+                    ready as f32 * 7.0 * defense * difficulty * (1.0 - 0.65 * attacker.suppression),
+                ));
             }
         }
     }
-    for &(attacker, target, _) in &volleys {
-        battle.effects.push(VolleyEffect {
-            from: battle.squads[attacker].pos,
-            to: battle.squads[target].pos,
-            team: battle.squads[attacker].team,
-            ttl: 0.24,
-        });
-        battle.volley_count += 1;
+    for &(attacker, target, ready, _) in &volleys {
+        if battle.squads[attacker].visible_to_blue && battle.squads[target].visible_to_blue {
+            battle.effects.push(VolleyEffect {
+                from: battle.squads[attacker].pos,
+                to: battle.squads[target].pos,
+                team: battle.squads[attacker].team,
+                ttl: 0.24,
+            });
+            battle.volley_count += 1;
+        }
         let squad = &mut battle.squads[attacker];
         let cooldown = if squad.kit == Kit::Support { 0.85 } else { 1.2 };
-        for soldier in &mut squad.soldiers {
-            if soldier.hp > 0.0 && soldier.cooldown <= 0.0 {
-                soldier.cooldown = cooldown;
-                soldier.veterancy = soldier.veterancy.saturating_add(1).min(100);
-                squad.supplies = (squad.supplies - 0.45).max(0.0);
-            }
+        for soldier in squad
+            .soldiers
+            .iter_mut()
+            .filter(|s| s.hp > 0.0 && s.cooldown <= 0.0)
+            .take(ready)
+        {
+            soldier.cooldown = cooldown;
+            soldier.veterancy = soldier.veterancy.saturating_add(1).min(100);
+            squad.supplies = (squad.supplies - 0.45).max(0.0);
         }
     }
-    for (_, j, mut damage) in volleys {
+    for (_, j, ready, mut damage) in volleys {
         let squad = &mut battle.squads[j];
+        squad.suppression = (squad.suppression + ready as f32 * 0.025).min(1.0);
         for soldier in &mut squad.soldiers {
             let dealt = damage.min(soldier.hp);
             soldier.hp -= dealt;
@@ -479,7 +536,7 @@ pub fn call_reserve(battle: &mut Battle, team: Team) -> bool {
 }
 
 fn update_frontline(battle: &mut Battle, dt: f32) {
-    let field: Vec<_> = influence(&battle.squads).collect();
+    let field: Vec<_> = influence(battle.squads.iter()).collect();
     for objective in &mut battle.objectives {
         let (owner, contested) = territory(objective.pos, &field);
         objective.owner = owner;
@@ -577,6 +634,57 @@ mod tests {
     use super::*;
 
     const DT: f32 = 1.0 / 64.0;
+
+    #[test]
+    fn scouting_reveals_distant_contacts_without_granting_fire_through_blockers() {
+        let mut battle = new_battle(&Roster::default());
+        battle.squads[0].pos = Vec2::new(0.0, -180.0);
+        battle.squads[4].pos = Vec2::new(405.0, -180.0);
+        step_battle(&mut battle, Difficulty::Standard, DT);
+        assert!(!battle.squads[4].visible_to_blue);
+        battle.squads[0].kit = Kit::Scout;
+        step_battle(&mut battle, Difficulty::Standard, DT);
+        assert!(battle.squads[4].visible_to_blue);
+        let (blocker, _) = crate::contact::sight_blockers(battle.map)[0];
+        battle.squads[0].pos = blocker - Vec2::X * 100.0;
+        battle.squads[4].pos = blocker + Vec2::X * 100.0;
+        step_battle(&mut battle, Difficulty::Standard, DT);
+        assert!(!battle.squads[4].visible_to_blue);
+        assert_eq!(
+            battle.squads[4].last_contact.map(|(pos, _)| pos),
+            Some(Vec2::new(405., -180.))
+        );
+        assert!(battle.effects.is_empty());
+    }
+
+    #[test]
+    fn cautious_advance_halts_at_contact_then_resumes_after_smoke_blocks_sight() {
+        let mut battle = new_battle(&Roster::default());
+        battle.squads[0].pos = Vec2::ZERO;
+        battle.squads[4].pos = Vec2::X * 170.0;
+        battle.squads[0].orders.push_back(Vec2::X * 300.0);
+        battle.squads[0].cautious_move = true;
+        step_battle(&mut battle, Difficulty::Standard, DT);
+        assert_eq!(battle.squads[0].pos, Vec2::ZERO);
+        assert!(battle.squads[0].suppression > 0.0);
+        battle.squads[4].smoke = 5.0;
+        step_battle(&mut battle, Difficulty::Standard, DT);
+        assert!(battle.squads[0].pos.x > 0.0);
+        assert!(!battle.squads[4].visible_to_blue);
+    }
+
+    #[test]
+    fn suppression_reduces_movement_and_recovers_without_contact() {
+        let mut battle = new_battle(&Roster::default());
+        for (index, squad) in battle.squads[..2].iter_mut().enumerate() {
+            squad.pos = Vec2::Y * (index as f32 * 100.0);
+            squad.orders.push_back(squad.pos + Vec2::X * 200.0);
+        }
+        battle.squads[0].suppression = 0.9;
+        step_battle(&mut battle, Difficulty::Standard, DT);
+        assert!(battle.squads[0].pos.x < battle.squads[1].pos.x);
+        assert!(battle.squads[0].suppression < 0.9);
+    }
 
     #[test]
     fn frontline_flags_follow_influence_beyond_the_capture_ring() {

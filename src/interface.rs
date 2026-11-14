@@ -660,7 +660,7 @@ fn battle_panels(commands: &mut Commands, r: Entity, battle: &Battle) {
                     button(p, "RESUME", Action::Resume, 210.);
                     text(
                         p,
-                        "Drag select  /  Ctrl+A select all\nShift + right-click queues waypoints\nCtrl+1-4 set group  /  1-4 recall\nWASD or arrows pan  /  wheel zoom\nSpace toggles planning pause",
+                        "Drag select  /  Ctrl+A select all\nShift + right-click queues waypoints\nCtrl+1-4 set group  /  1-4 recall\nWASD or arrows pan  /  wheel zoom\nSpace toggles planning pause\nQ + right-click ground advances cautiously",
                         12.,
                         MUTED,
                     );
@@ -808,6 +808,7 @@ fn actions(
                 for i in selected {
                     if let Some(s) = battle.squads.get_mut(i) {
                         s.orders.clear();
+                        s.cautious_move = false;
                         s.focus = None;
                     }
                 }
@@ -1010,11 +1011,12 @@ fn update_hud(battle: Res<Battle>, mut labels: Query<(&HudText, &mut Text, &mut 
                 .and_then(|i| battle.squads.get(*i))
                 .map(|s| {
                     format!(
-                        "{}/{} troops  |  {:.0}% supplies  |  {}",
+                        "{}/{} troops  |  {:.0}% supplies  |  {}  |  {:.0}% suppression",
                         s.manpower(),
                         s.soldiers.len(),
                         s.supplies,
-                        s.marker_status().0
+                        s.marker_status().0,
+                        s.suppression * 100.0
                     )
                 })
                 .unwrap_or_default(),

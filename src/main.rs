@@ -1,5 +1,6 @@
 mod ai;
 mod battle;
+mod contact;
 mod interface;
 mod model;
 mod operation;
